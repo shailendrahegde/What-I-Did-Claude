@@ -1271,51 +1271,66 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         </tr>"""
 
     return f"""
-      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
-        <strong style="color:{C['text']}">How to read this table:</strong>
-        Each row shows a project's raw session data (top) and the hour multiplier each signal
-        maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
-        among tools, tokens, and active time becomes the base estimate.
-        Lines of code are added on top.
-      </div>
-      <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
-                  background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
-        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
-        <strong style="color:{C['accent']}">Bold</strong> = highest signal (base driver)
-        &nbsp;&nbsp;
-        <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
-              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
-          &#9654; Show formula column
-        </span>
-      </div>
-      <table width="100%" cellpadding="0" cellspacing="0"
-             style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
-        <tr style="background:{C['accent_lt']}">
-          <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:22%">Project</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Tools</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Tokens</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Active</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">Lines</th>
-          <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
-          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                     color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
-                     border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
-        </tr>
-        {rows}
+  <tr>
+    <td style="background:{C['card']};padding:0;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                      color:rgba(255,255,255,0.7)">Estimation Evidence</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+            How effort estimates were derived from session signals</div>
+        </td></tr>
       </table>
-      {_signal_guide()}"""
+      <div style="padding:14px 24px 20px">
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
+          <strong style="color:{C['text']}">How to read this table:</strong>
+          Each row shows a project's raw session data (top) and the hour multiplier each signal
+          maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
+          among tools, tokens, and active time becomes the base estimate.
+          Lines of code are added on top.
+        </div>
+        <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
+                    background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
+          <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
+          <strong style="color:{C['accent']}">Bold</strong> = highest signal (base driver)
+          &nbsp;&nbsp;
+          <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
+                style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
+            &#9654; Show formula column
+          </span>
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
+          <tr style="background:{C['accent_lt']}">
+            <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:22%">Project</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%">Tools</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%">Tokens</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%">Active</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%">Lines</th>
+            <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
+          </tr>
+          {rows}
+        </table>
+        {_signal_guide()}
+      </div>
+    </td>
+  </tr>"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
