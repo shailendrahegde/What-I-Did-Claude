@@ -893,279 +893,403 @@ def _activity_bar(analysis: dict) -> str:
 # Estimation Evidence section
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _resolve_metrics(project: str, session_metrics: dict, goal_date: str) -> dict:
+def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -> dict:
     """Find the best-matching session metrics entry for a project+date."""
     if not session_metrics:
         return {}
-    # Try exact project match
+    if goal_date:
+        dated_key = goal_date + "|" + project
+        metrics = session_metrics.get(dated_key, {})
+        if metrics:
+            return metrics
+        last = project.replace("\\", "/").split("/")[-1]
+        metrics = session_metrics.get(goal_date + "|" + last, {})
+        if metrics:
+            return metrics
+    # Fall back to non-dated key (single-day reports)
     if project in session_metrics:
         return session_metrics[project]
-    # Try last path segment
     last = project.replace("\\", "/").split("/")[-1]
     if last in session_metrics:
         return session_metrics[last]
-    # Return first entry if only one
     if len(session_metrics) == 1:
         return next(iter(session_metrics.values()))
     return {}
 
 
-def _tier_tools(n_tools: int) -> tuple:
-    """Return (tier_label, tier_color) for tool-call count."""
-    if n_tools == 0:
-        return "—", C["muted"]
-    if n_tools < 10:
-        return "Low", "#bf8700"
-    if n_tools < 40:
-        return "Med", C["accent"]
-    return "High", C["green"]
+# ── Deterministic effort formula ─────────────────────────────────────────────
+
+def _tier_tools(n: int) -> float:
+    """Tool invocations → hour multiplier."""
+    if n <= 0:   return 0.0
+    if n <= 5:   return 0.25
+    if n <= 15:  return 0.5
+    if n <= 50:  return 0.75
+    if n <= 150: return 1.5
+    if n <= 400: return 3.0
+    return 5.0
 
 
-def _tier_reqs(n_reqs: int) -> tuple:
-    if n_reqs == 0:
-        return "—", C["muted"]
-    if n_reqs < 5:
-        return "Low", "#bf8700"
-    if n_reqs < 20:
-        return "Med", C["accent"]
-    return "High", C["green"]
+def _tier_tokens(n: int) -> float:
+    """Token usage → hour multiplier (replaces premium_requests for Claude)."""
+    if n <= 0:       return 0.0
+    if n <= 5000:    return 0.25
+    if n <= 20000:   return 0.5
+    if n <= 50000:   return 1.0
+    if n <= 150000:  return 2.0
+    return 3.0
 
 
-def _tier_lines(n_lines: int) -> tuple:
-    if n_lines == 0:
-        return "—", C["muted"]
-    if n_lines < 50:
-        return "Low", "#bf8700"
-    if n_lines < 300:
-        return "Med", C["accent"]
-    return "High", C["green"]
+def _tier_lines(n: int) -> float:
+    """Lines added → additive hour contribution."""
+    if n <= 0:   return 0.0
+    if n <= 25:  return 0.1
+    if n <= 100: return 0.25
+    if n <= 300: return 0.5
+    return 1.0
 
 
-def _tier_active(n_minutes: float) -> tuple:
-    if n_minutes == 0:
-        return "—", C["muted"]
-    if n_minutes < 15:
-        return "Low", "#bf8700"
-    if n_minutes < 60:
-        return "Med", C["accent"]
-    return "High", C["green"]
+def _tier_active(m: float) -> float:
+    """Active engagement minutes → hours (4× multiplier — human without AI needs ~4× longer)."""
+    return round(m * 4 / 60, 1)
 
 
-def compute_formula_estimate(metrics: dict) -> float:
+def compute_formula_estimate(metrics: dict) -> dict:
+    """Deterministic effort estimate: max(tools, tokens, active) + lines.
+
+    Returns dict with per-signal multipliers and final estimate.
     """
-    Heuristic hour estimate from session metrics.
-    Base = active_minutes / 60, scaled by tool/request/line complexity signals.
-    """
-    active_min = metrics.get("active_minutes", 0)
-    n_tools    = metrics.get("tool_calls", 0)
-    n_reqs     = metrics.get("requests", 0)
-    n_lines    = metrics.get("lines_changed", 0)
+    tool_h   = _tier_tools(metrics.get("tool_invocations", 0))
+    tok_h    = _tier_tokens(metrics.get("tokens", 0))
+    active_h = _tier_active(metrics.get("active_minutes", 0))
+    lines_h  = _tier_lines(metrics.get("lines_added", 0))
 
-    if not active_min and not n_tools and not n_reqs:
-        return 0.0
+    base  = max(tool_h, tok_h, active_h)
+    total = max(base + lines_h, 0.25)   # Floor at 0.25h
 
-    base_h = (active_min or 5) / 60.0
-
-    # Scale up for high tool / request / line counts
-    tool_factor = 1.0 + min(n_tools / 100, 2.0)
-    req_factor  = 1.0 + min(n_reqs  / 50,  1.5)
-    line_factor = 1.0 + min(n_lines / 500, 1.0)
-
-    return round(base_h * tool_factor * req_factor * line_factor, 2)
+    return {
+        "tool_h":   tool_h,
+        "tok_h":    tok_h,
+        "active_h": active_h,
+        "lines_h":  lines_h,
+        "base":     base,
+        "total":    round(total * 4) / 4,  # Nearest 0.25h
+    }
 
 
 def _evidence_strip(goal: dict, session_metrics: dict) -> str:
-    """Compact evidence strip shown inside the expanded goal detail."""
+    """Compact metrics bar showing evidence and formula behind a goal's estimate."""
     project = goal.get("project", "")
     metrics = _resolve_metrics(project, session_metrics, goal.get("date", ""))
     if not metrics:
         return ""
 
-    active_min = metrics.get("active_minutes", 0)
-    n_tools    = metrics.get("tool_calls", 0)
-    n_reqs     = metrics.get("requests", 0)
-    n_lines    = metrics.get("lines_changed", 0)
-    formula_h  = compute_formula_estimate(metrics)
+    fe = compute_formula_estimate(metrics)
 
-    t_tools_lbl, t_tools_col = _tier_tools(n_tools)
-    t_reqs_lbl,  t_reqs_col  = _tier_reqs(n_reqs)
-    t_lines_lbl, t_lines_col = _tier_lines(n_lines)
-    t_active_lbl, t_active_col = _tier_active(active_min)
+    parts = []
+    tools = metrics.get("tool_invocations", 0)
+    if tools:
+        parts.append(f"<strong>{tools}</strong> tools &rarr; {_fmt_h(fe['tool_h'])}")
+    tok = metrics.get("tokens", 0)
+    if tok:
+        parts.append(f"<strong>{tok:,}</strong> tokens &rarr; {_fmt_h(fe['tok_h'])}")
+    la = metrics.get("lines_added", 0)
+    if la:
+        parts.append(f"<strong>+{la}</strong> lines &rarr; {_fmt_h(fe['lines_h'])}")
+    active = metrics.get("active_minutes", 0)
+    if active:
+        parts.append(f"<strong>{active:.0f}m</strong> active &rarr; {_fmt_h(fe['active_h'])}")
 
-    def _pill(label, color):
-        return (f'<span style="background:{color};color:#fff;padding:1px 7px;'
-                f'border-radius:8px;font-size:10px;font-weight:600">{label}</span>')
+    if not parts:
+        return ""
+
+    formula_h = _fmt_h(fe["total"])
+    ai_h      = _fmt_h(goal.get("human_hours", 0))
+    import hashlib as _hl
+    _key = (goal.get('title', '') + goal.get('date', '')).encode()
+    fid  = "fs-" + _hl.sha1(_key).hexdigest()[:12]
 
     return f"""
-    <div style="background:{C['accent_lt']};border-radius:6px;padding:8px 14px;
-                margin:6px 0 4px;font-size:11px">
-      <span style="font-weight:700;color:{C['accent']};text-transform:uppercase;
-                   font-size:10px;letter-spacing:0.7px">Estimation Evidence</span>
-      <span style="margin-left:12px;color:{C['muted']}">Active time:</span>
-      <strong style="margin-left:4px">{_fmt_h(active_min / 60)}</strong>
-      {_pill(t_active_lbl, t_active_col)}
-      <span style="margin-left:10px;color:{C['muted']}">Tool calls:</span>
-      <strong style="margin-left:4px">{n_tools}</strong>
-      {_pill(t_tools_lbl, t_tools_col)}
-      <span style="margin-left:10px;color:{C['muted']}">Requests:</span>
-      <strong style="margin-left:4px">{n_reqs}</strong>
-      {_pill(t_reqs_lbl, t_reqs_col)}
-      <span style="margin-left:10px;color:{C['muted']}">Lines changed:</span>
-      <strong style="margin-left:4px">{n_lines}</strong>
-      {_pill(t_lines_lbl, t_lines_col)}
-      <span style="margin-left:10px;color:{C['accent']};font-weight:600">
-        Formula estimate: {_fmt_h(formula_h)}
-      </span>
-    </div>"""
+            <div style="padding:8px 24px;background:{C['subtle']};border-bottom:1px solid {C['border']}">
+              <div style="font-size:10px;color:{C['muted']};line-height:1.5">
+                <span style="font-weight:700;color:{C['accent']};margin-right:4px">&#128202;</span>
+                {' &middot; '.join(parts)}
+                &nbsp;&nbsp;
+                <strong style="color:{C['green']}">{ai_h}</strong>
+                <span style="font-size:9px;color:{C['muted']}"> AI-calibrated</span>
+                <span id="{fid}-arrow" onclick="toggleFormula('{fid}')"
+                      style="cursor:pointer;font-size:9px;color:{C['accent']};
+                             margin-left:10px;user-select:none">&#9654; formula</span>
+              </div>
+              <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
+                <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
+                             color:{C['text']}">max({_fmt_h(fe['tool_h'])}, {_fmt_h(fe['tok_h'])}, {_fmt_h(fe['active_h'])}) + {_fmt_h(fe['lines_h'])}</code>
+                = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
+              </div>
+            </div>"""
+
+
+def _signal_tier_table(title: str, icon: str, description: str, tiers: list) -> str:
+    """Render a single signal explanation table with tiers and multipliers."""
+    rows = ""
+    for i, (range_label, hour_label, example) in enumerate(tiers):
+        bg = C["subtle"] if i % 2 == 0 else C["card"]
+        rows += (
+            f'<tr style="background:{bg}">'
+            f'<td style="padding:3px 10px;font-size:10px;font-weight:600;color:{C["text"]};'
+            f'border-bottom:1px solid {C["border"]};width:14%;white-space:nowrap">{range_label}</td>'
+            f'<td style="padding:3px 10px;border-bottom:1px solid {C["border"]};width:12%;text-align:center">'
+            f'<span style="font-size:10px;font-weight:700;color:{C["accent"]};'
+            f'background:{C["accent_lt"]};padding:1px 8px;border-radius:8px">{hour_label}</span></td>'
+            f'<td style="padding:3px 10px;font-size:10px;color:{C["muted"]};'
+            f'border-bottom:1px solid {C["border"]};width:74%">{example}</td>'
+            f'</tr>'
+        )
+    return f"""
+        <div style="margin-top:14px">
+          <div style="font-size:10px;font-weight:700;color:{C['text']};margin-bottom:2px">
+            {icon} {title}</div>
+          <div style="font-size:10px;color:{C['muted']};margin-bottom:6px;line-height:1.4">
+            {description}</div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid {C['border']};border-radius:5px;overflow:hidden">
+            <tr style="background:{C['accent_lt']}">
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;
+                         border-bottom:1px solid {C['border']};width:14%">Range</th>
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;text-align:center;
+                         border-bottom:1px solid {C['border']};width:12%">Multiplier</th>
+              <th style="padding:3px 10px;font-size:9px;font-weight:700;color:{C['accent']};
+                         text-transform:uppercase;letter-spacing:0.5px;
+                         border-bottom:1px solid {C['border']};width:74%">What this means</th>
+            </tr>
+            {rows}
+          </table>
+        </div>"""
 
 
 def _signal_guide() -> str:
-    """Expandable methodology explanation."""
+    """Detailed explanation of each session signal with tiered examples."""
+    tools = _signal_tier_table(
+        "Tool Invocations", "&#128295;",
+        "Each discrete action Claude performs: read a file, edit code, run a command, "
+        "search, create a file. Higher counts indicate more complex, multi-step work.",
+        [
+            ("1–5",    "0.25h", "Quick task &mdash; open a file, make one edit, done. "
+                                "<em>\"Fix this typo in config.yaml\"</em>"),
+            ("5–15",   "0.5h",  "Small focused change &mdash; read a few files, edit a function, run tests. "
+                                "<em>\"Add error handling to the upload endpoint\"</em>"),
+            ("15–50",  "0.75h", "Moderate multi-file work &mdash; touch 3–4 files, debug, iterate. "
+                                "<em>\"Refactor the auth module to use JWT\"</em>"),
+            ("50–150", "1.5h",  "Substantial feature &mdash; design + implement across a module with tests. "
+                                "<em>\"Build the report generation pipeline\"</em>"),
+            ("150–400","3h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
+                                "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
+            ("400+",   "5h",    "System overhaul &mdash; extensive multi-session redesign across many files. "
+                                "<em>\"Redesign the entire report layout with branding\"</em>"),
+        ]
+    )
+    tokens = _signal_tier_table(
+        "Token Usage", "&#9889;",
+        "Total tokens consumed (input + output + cache). Reflects the scale of AI reasoning "
+        "and context &mdash; more tokens means more back-and-forth depth and complexity.",
+        [
+            ("0",           "0h",    "No tokens &mdash; session data only, no AI calls"),
+            ("1–5k",        "0.25h", "Quick consultation &mdash; ask one question, get answer, done. "
+                                     "<em>\"What does this error mean?\"</em>"),
+            ("5k–20k",      "0.5h",  "Moderate back-and-forth &mdash; debug a problem, explore options. "
+                                     "<em>\"Why is this test failing? Try a different approach\"</em>"),
+            ("20k–50k",     "1h",    "Extended collaboration &mdash; iterative feature build with refinement. "
+                                     "<em>\"Build this component, now adjust the styling, now add tests\"</em>"),
+            ("50k–150k",    "2h",    "Deep work session &mdash; complex design + implementation + review. "
+                                     "<em>\"Architect the data pipeline and implement each stage\"</em>"),
+            ("150k+",       "3h",    "Marathon partnership &mdash; sustained, intensive multi-hour collaboration. "
+                                     "<em>\"Full system design through to delivery with extensive context\"</em>"),
+        ]
+    )
+    lines = _signal_tier_table(
+        "Lines of Code", "&#128196;",
+        "Net code added to the project. Indicates the volume of deliverable output &mdash; "
+        "more lines generally means more development and review work for a human.",
+        [
+            ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
+            ("1–25",   "0.1h",  "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
+            ("25–100", "0.25h", "Small feature &mdash; a new function, helper, or template. "
+                                "<em>\"Add a utility function with error handling\"</em>"),
+            ("100–300","0.5h",  "Moderate development &mdash; a new module or significant feature. "
+                                "<em>\"Build the session harvester with event parsing\"</em>"),
+            ("300+",   "1h",    "Substantial build &mdash; major feature, new tool, or extensive refactor. "
+                                "<em>\"Ship 400+ lines of report generation code\"</em>"),
+        ]
+    )
+    active = _signal_tier_table(
+        "Active Engagement Time", "&#9201;",
+        "Time actively engaged with Claude, excluding idle gaps longer than 5 minutes. "
+        "Multiplier is <strong>4&times; active time</strong> &mdash; reflecting that a human "
+        "without AI would need roughly four times longer to achieve the same result.",
+        [
+            ("&lt; 5m",    "0.3h",  "Quick task &mdash; one-shot edit, single question"),
+            ("5–15m",      "1h",    "Focused task &mdash; fix a bug, write a function"),
+            ("15–45m",     "2–3h",  "Working session &mdash; implement and test a feature"),
+            ("45m–2h",     "3–8h",  "Deep work &mdash; multi-step design, implementation, and refinement"),
+            ("2–6h",       "8–24h", "Extended session &mdash; full feature build across multiple iterations"),
+            ("6h+",        "24h+",  "Marathon project &mdash; comprehensive system build over many hours"),
+        ]
+    )
     return f"""
-    <div style="margin-top:12px">
-      <span style="font-size:10px;color:{C['accent']};cursor:pointer;font-weight:600"
-            onclick="toggleFormula('signal-guide')">
-        <span id="signal-guide-arrow">&#9654; formula</span>
-      </span>
-      <div id="signal-guide" style="display:none;margin-top:8px;padding:10px 14px;
-           background:{C['subtle']};border-radius:6px;font-size:11px;
-           color:{C['text']};line-height:1.6">
-        <strong>How hours are estimated from session signals:</strong><br>
-        Base = active session minutes ÷ 60.<br>
-        Scaled up by: tool-call density (÷100, max ×3), request volume (÷50, max ×2.5),
-        lines changed (÷500, max ×2).<br>
-        Tiers: <strong>Low</strong> = minimal complexity,
-               <strong>Med</strong> = typical development,
-               <strong>High</strong> = intensive/complex work.
-      </div>
-    </div>"""
-
-
-def _signal_tier_table() -> str:
-    """Reference table of tier thresholds."""
-    rows = [
-        ("Tool calls",    "< 10",    "10–39",   "≥ 40"),
-        ("Requests",      "< 5",     "5–19",    "≥ 20"),
-        ("Lines changed", "< 50",    "50–299",  "≥ 300"),
-        ("Active minutes","< 15 min","15–59 min","≥ 60 min"),
-    ]
-    cells = ""
-    for signal, low, med, high in rows:
-        cells += f"""
-          <tr>
-            <td style="font-size:10px;color:{C['muted']};padding:3px 12px 3px 0">{signal}</td>
-            <td style="font-size:10px;color:#bf8700;padding:3px 10px">{low}</td>
-            <td style="font-size:10px;color:{C['accent']};padding:3px 10px">{med}</td>
-            <td style="font-size:10px;color:{C['green']};padding:3px 10px">{high}</td>
-          </tr>"""
-
-    return f"""
-    <div style="margin-top:10px">
-      <span style="font-size:10px;color:{C['muted']};font-weight:600;text-transform:uppercase;
-                   letter-spacing:0.6px">Tier thresholds</span>
-      <table cellpadding="0" cellspacing="0" style="margin-top:4px">
-        <tr>
-          <th style="font-size:9px;color:{C['muted']};padding:2px 12px 2px 0;
-                     text-align:left">Signal</th>
-          <th style="font-size:9px;color:#bf8700;padding:2px 10px;text-align:left">Low</th>
-          <th style="font-size:9px;color:{C['accent']};padding:2px 10px;text-align:left">Med</th>
-          <th style="font-size:9px;color:{C['green']};padding:2px 10px;text-align:left">High</th>
-        </tr>
-        {cells}
-      </table>
-    </div>"""
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                      color:{C['muted']};margin-bottom:4px">What each signal means</div>
+          <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
+            Each session signal maps to a multiplier representing equivalent human effort. The AI
+            reads all signals together and assigns an estimate within the highest applicable range.
+            <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
+            Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
+          </div>
+          {tools}
+          {tokens}
+          {lines}
+          {active}
+        </div>"""
 
 
 def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
-    """Estimation evidence section showing signals per goal."""
+    """Evidence table showing raw signals, per-signal multipliers, and formula result."""
     session_metrics = analysis.get("session_metrics", {})
-    if not session_metrics and not goals:
+    if not goals:
         return ""
 
-    goal_rows = ""
+    total_h = sum(g.get("human_hours", 0) for g in goals)
+    total_formula_h = 0.0
+
+    rows = ""
     for i, g in enumerate(goals):
+        bg = C["subtle"] if i % 2 == 0 else C["card"]
         project = g.get("project", "")
         metrics = _resolve_metrics(project, session_metrics, g.get("date", ""))
-        title   = g.get("title", f"Goal {i+1}")
+        fe = compute_formula_estimate(metrics)
+        total_formula_h += fe["total"]
 
-        if not metrics:
-            continue
+        tools      = metrics.get("tool_invocations", 0)
+        tok        = metrics.get("tokens", 0)
+        la         = metrics.get("lines_added", 0)
+        active     = metrics.get("active_minutes", 0)
+        active_str = f"{active:.0f}m" if active else "&mdash;"
+        tok_str    = f"{tok:,}" if tok else "&mdash;"
+        ai_h       = _fmt_h(g.get("human_hours", 0))
+        formula_h  = _fmt_h(fe["total"])
 
-        formula_h = compute_formula_estimate(metrics)
-        human_h   = g.get("human_hours", 0)
-        active_m  = metrics.get("active_minutes", 0)
-        n_tools   = metrics.get("tool_calls", 0)
-        n_reqs    = metrics.get("requests", 0)
-        n_lines   = metrics.get("lines_changed", 0)
+        title = g.get("title", "")
+        if len(title) > 40:
+            title = title[:37] + "..."
 
-        t_tools_lbl, t_tools_col = _tier_tools(n_tools)
-        t_reqs_lbl,  t_reqs_col  = _tier_reqs(n_reqs)
-        t_lines_lbl, t_lines_col = _tier_lines(n_lines)
-        t_act_lbl,   t_act_col   = _tier_active(active_m)
+        # Bold whichever signal is the base driver (the max)
+        max_val = fe["base"]
+        def _hl(v: float) -> str:
+            s = _fmt_h(v) if v > 0 else "&mdash;"
+            if v > 0 and v == max_val:
+                return f'<strong style="color:{C["accent"]}">{s}</strong>'
+            return f'<span style="color:{C["muted"]}">{s}</span>'
 
-        def _chip(lbl, col):
-            return (f'<span style="background:{col};color:#fff;padding:1px 6px;'
-                    f'border-radius:6px;font-size:9px;font-weight:700">{lbl}</span>')
+        lines_m = _fmt_h(fe["lines_h"]) if fe["lines_h"] > 0 else "&mdash;"
 
-        goal_rows += f"""
-          <tr style="border-bottom:1px solid {C['border']}">
-            <td style="padding:8px 12px;font-size:11px;color:{C['text']};
-                       font-weight:600;max-width:160px;word-break:break-word">{title}</td>
-            <td style="padding:8px 12px;font-size:11px;color:{C['muted']};
-                       text-align:center">{_fmt_h(active_m / 60)} {_chip(t_act_lbl, t_act_col)}</td>
-            <td style="padding:8px 12px;font-size:11px;color:{C['muted']};
-                       text-align:center">{n_tools} {_chip(t_tools_lbl, t_tools_col)}</td>
-            <td style="padding:8px 12px;font-size:11px;color:{C['muted']};
-                       text-align:center">{n_reqs} {_chip(t_reqs_lbl, t_reqs_col)}</td>
-            <td style="padding:8px 12px;font-size:11px;color:{C['muted']};
-                       text-align:center">{n_lines} {_chip(t_lines_lbl, t_lines_col)}</td>
-            <td style="padding:8px 12px;font-size:12px;font-weight:700;
-                       color:{C['accent']};text-align:center">{_fmt_h(formula_h)}</td>
-            <td style="padding:8px 12px;font-size:12px;font-weight:700;
-                       color:{C['green']};text-align:center">{_fmt_h(human_h)}</td>
-          </tr>"""
+        rows += f"""
+        <tr style="background:{bg}">
+          <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:22%"
+              rowspan="2">
+            <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
+          </td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{tools}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{tok_str}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">{active_str}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
+                     font-weight:600;width:13%">+{la}</td>
+          <td class="formula-col" style="padding:4px 6px;text-align:center;width:13%;
+                     vertical-align:middle;display:none" rowspan="2">
+            <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
+            <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
+          </td>
+          <td style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle" rowspan="2">
+            <div style="font-size:14px;font-weight:700;color:{C['green']}">{ai_h}</div>
+            <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">AI est.</div>
+          </td>
+        </tr>
+        <tr style="background:{bg}">
+          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+            {_hl(fe["tool_h"])}</td>
+          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+            {_hl(fe["tok_h"])}</td>
+          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+            {_hl(fe["active_h"])}</td>
+          <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
+            <span style="color:{C['muted']}">{lines_m}</span></td>
+        </tr>"""
 
-    if not goal_rows:
-        return ""
+    # Total row
+    rows += f"""
+        <tr style="background:{C['accent_lt']}">
+          <td style="padding:8px 10px;border-top:2px solid {C['border']};
+                     font-size:11px;font-weight:700;color:{C['accent']};text-align:right"
+              colspan="5">Total</td>
+          <td class="formula-col" style="padding:8px 6px;border-top:2px solid {C['border']};
+                     text-align:center;display:none">
+            <div style="font-size:16px;font-weight:700;color:{C['accent']}">{_fmt_h(total_formula_h)}</div>
+          </td>
+          <td style="padding:8px 6px;border-top:2px solid {C['border']};text-align:center">
+            <div style="font-size:16px;font-weight:700;color:{C['green']}">{_fmt_h(total_h)}</div>
+          </td>
+        </tr>"""
 
     return f"""
-  <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']};
-               border-top:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:10px">Estimation Evidence</div>
-      <div style="overflow-x:auto">
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border:1px solid {C['border']};border-radius:6px;overflow:hidden;
-                      min-width:560px">
-          <thead>
-            <tr style="background:{C['accent_lt']}">
-              <th style="padding:6px 12px;text-align:left;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Goal</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Active</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Tools</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Reqs</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Lines</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px">Formula</th>
-              <th style="padding:6px 12px;text-align:center;font-size:10px;font-weight:700;
-                         color:{C['green']};text-transform:uppercase;letter-spacing:0.5px">Analyst</th>
-            </tr>
-          </thead>
-          <tbody>
-            {goal_rows}
-          </tbody>
-        </table>
+      <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
+        <strong style="color:{C['text']}">How to read this table:</strong>
+        Each row shows a project's raw session data (top) and the hour multiplier each signal
+        maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
+        among tools, tokens, and active time becomes the base estimate.
+        Lines of code are added on top.
       </div>
-      {_signal_guide()}
-      {_signal_tier_table()}
-    </td>
-  </tr>"""
+      <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
+                  background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
+        <span style="color:{C['green']}">&#9632;</span> AI-calibrated estimate &nbsp;·&nbsp;
+        <strong style="color:{C['accent']}">Bold</strong> = highest signal (base driver)
+        &nbsp;&nbsp;
+        <span id="formula-col-toggle" data-open="0" onclick="toggleFormulaCol()"
+              style="cursor:pointer;font-size:9px;color:{C['accent']};user-select:none">
+          &#9654; Show formula column
+        </span>
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border:1px solid {C['border']};border-radius:7px;overflow:hidden">
+        <tr style="background:{C['accent_lt']}">
+          <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:22%">Project</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%">Tools</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%">Tokens</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%">Active</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%">Lines</th>
+          <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
+          <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                     color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
+                     border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
+        </tr>
+        {rows}
+      </table>
+      {_signal_guide()}"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
