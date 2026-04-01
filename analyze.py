@@ -173,7 +173,7 @@ def _build_session_metrics(sessions: list) -> dict:
 
         tok = s.get("tokens", {})
         tools_count = sum(len(m.get("tools_after", [])) for m in s.get("messages", []))
-        lines_added = 0  # not available from session data directly
+        lines_added = s.get("lines_added", 0)
         active_min  = _compute_active_minutes(s)
         wall_min    = compute_elapsed_minutes(
             s.get("session_start", ""),
@@ -228,9 +228,11 @@ def analyze_day(
             if cached.get("locked"):
                 print("  (Analysis is locked — skipping refresh. Remove 'locked' field to re-analyse.)")
                 cached["tokens"] = total_tokens
+                _attach_metrics(cached, sessions)
                 return cached
             if not refresh:
                 cached["tokens"] = total_tokens  # always use live token counts
+                _attach_metrics(cached, sessions)  # always attach live session metrics
                 print("  (Using cached analysis — pass --refresh to re-analyse.)")
                 return cached
         except Exception:

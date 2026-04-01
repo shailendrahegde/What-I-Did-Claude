@@ -263,8 +263,10 @@ def get_sessions_for_date(target_date: str) -> list:
         has_target_date = False
         session_start = None
         session_end   = None
-        git_ops   = []
-        git_repos = set()
+        git_ops        = []
+        git_repos      = set()
+        lines_added_count = 0
+        pull_requests  = []
         cwd_seen  = None   # actual working directory from entry metadata
         entrypoint = None  # 'cli', 'vscode', etc.
 
@@ -364,11 +366,15 @@ def get_sessions_for_date(target_date: str) -> list:
                                             summary = f"DocFound: {dn}"
                                             if summary not in last["tools_after"]:
                                                 last["tools_after"].append(summary)
-                                for m in _re.finditer(
-                                    r'github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|[\s"\']|$)',
-                                    result_content or "", _re.IGNORECASE
+                                # Extract lines added from git diff/commit stats
+                                for lm in _re.finditer(
+                                    r'(\d+) insertion',
+                                    result_content or ""
                                 ):
-                                    git_repos.add(m.group(1).rstrip("/"))
+                                    try:
+                                        lines_added_count += int(lm.group(1))
+                                    except (ValueError, AttributeError):
+                                        pass
                 if ts:
                     if not session_start:
                         session_start = ts
@@ -402,12 +408,22 @@ def get_sessions_for_date(target_date: str) -> list:
                                 text = (desc or cmd)[:200]
                                 if _re.search(r'\bgit\b|\bgh\b', text, _re.IGNORECASE):
                                     git_ops.append((desc or cmd)[:120])
-                                # Extract github.com/org/repo from push/remote commands
-                                for m in _re.finditer(
-                                    r'github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|[\s"\']|$)',
-                                    text, _re.IGNORECASE
-                                ):
-                                    git_repos.add(m.group(1).rstrip("/"))
+                                # Only extract repos from push/remote/clone commands to avoid hallucinations
+                                if _re.search(r'\bpush\b|\bremote\b|\bclone\b', text, _re.IGNORECASE):
+                                    for m in _re.finditer(
+                                        r'github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|[\s"\']|$)',
+                                        text, _re.IGNORECASE
+                                    ):
+                                        slug = m.group(1).rstrip("/")
+                                        # Filter out obvious placeholder/template repos
+                                        parts = slug.split("/")
+                                        if len(parts) == 2 and parts[0] not in ("org", "user", "owner", "username") and parts[1] not in ("repo", "repository", "project", "emails", "myrepo"):
+                                            git_repos.add(slug)
+                                # Detect PR creation
+                                if _re.search(r'\bgh\s+pr\s+create\b', text, _re.IGNORECASE):
+                                    pr_url_m = _re.search(r'https://github\.com/[^\s"\']+/pull/\d+', text)
+                                    if pr_url_m:
+                                        pull_requests.append(pr_url_m.group(0))
 
                 if ts:
                     if not session_start:
@@ -441,8 +457,10 @@ def get_sessions_for_date(target_date: str) -> list:
                 "tokens": tokens,
                 "session_start": session_start,
                 "session_end": session_end,
-                "git_ops":   git_ops,
-                "git_repos": sorted(git_repos),
+                "git_ops":      git_ops,
+                "git_repos":    sorted(git_repos),
+                "lines_added":  lines_added_count,
+                "pull_requests": pull_requests,
             })
 
     return sessions

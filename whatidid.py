@@ -186,16 +186,21 @@ def _merge_analyses(day_analyses: list) -> dict:
             heuristic_dates.append(target_date)
 
         # Aggregate session_metrics across days using "date|project" key
-        for sm in analysis.get("session_metrics", []):
-            key = f"{target_date}|{sm.get('project', '')}"
-            if key not in merged_session_metrics:
-                merged_session_metrics[key] = dict(sm)
-                merged_session_metrics[key].setdefault("date", target_date)
-            else:
-                existing = merged_session_metrics[key]
-                existing["human_hours"]  = existing.get("human_hours", 0)  + sm.get("human_hours", 0)
-                existing["lines_added"]   = existing.get("lines_added", 0)  + sm.get("lines_added", 0)
-                existing["lines_removed"] = existing.get("lines_removed", 0) + sm.get("lines_removed", 0)
+        sm_raw = analysis.get("session_metrics", {})
+        if isinstance(sm_raw, dict):
+            for proj_key, sm in sm_raw.items():
+                if not isinstance(sm, dict):
+                    continue
+                key = f"{target_date}|{proj_key}"
+                if key not in merged_session_metrics:
+                    merged_session_metrics[key] = dict(sm)
+                    merged_session_metrics[key]["date"] = target_date
+                else:
+                    existing = merged_session_metrics[key]
+                    existing["tokens"]           = existing.get("tokens", 0)           + sm.get("tokens", 0)
+                    existing["tool_invocations"] = existing.get("tool_invocations", 0) + sm.get("tool_invocations", 0)
+                    existing["lines_added"]      = existing.get("lines_added", 0)      + sm.get("lines_added", 0)
+                    existing["active_minutes"]   = existing.get("active_minutes", 0)   + sm.get("active_minutes", 0)
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
@@ -234,10 +239,10 @@ def _merge_analyses(day_analyses: list) -> dict:
         "total_lines_added":    total_lines_added,
         "total_lines_removed":  total_lines_removed,
         "all_files":            sorted(all_files),
-        "merged_session_metrics": list(merged_session_metrics.values()),
+        "merged_session_metrics": dict(merged_session_metrics),
         "heuristic_dates":      heuristic_dates,
         "analysis_method":      analysis_method,
-        "session_metrics":      list(merged_session_metrics.values()),
+        "session_metrics":      dict(merged_session_metrics),
         "lines_added":          total_lines_added,
         "lines_removed":        total_lines_removed,
         "files_modified":       sorted(all_files),
