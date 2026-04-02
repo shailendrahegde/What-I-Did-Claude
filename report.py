@@ -92,7 +92,6 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
     n_goals       = len(goals)
     lines_added   = analysis.get("lines_added", 0)
-    lines_removed = analysis.get("lines_removed", 0)
     active_dates  = analysis.get("active_dates", [])
     n_active_days = len(active_dates) if active_dates else 1
     total_tasks   = sum(len(g.get("tasks", [])) for g in goals)
@@ -100,12 +99,7 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
     h_str = _fmt_h(total_human_h)
     sessions_label = f"{n_sessions} sessions"
 
-    if lines_added:
-        lines_val = f"+{lines_added:,}"
-        lines_sub = f"{lines_removed:,} removed"
-    else:
-        lines_val = "—"
-        lines_sub = ""
+    lines_val = f"+{lines_added:,}" if lines_added else "—"
 
     return f"""
   <tr>
@@ -116,7 +110,7 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
           {_kpi_card(str(n_goals), "Projects<br>Assisted", sessions_label)}
           {_kpi_card(h_str, "Human Effort<br>Equivalent", f"@ ${HOURLY_RATE}/hr")}
           {_kpi_card(str(total_tasks), "Tasks<br>Delivered", "")}
-          {_kpi_card(lines_val, "Lines of Code<br>Added", lines_sub)}
+          {_kpi_card(lines_val, "Lines of Code<br>Added", "")}
           {_kpi_card(str(n_active_days), "Active<br>Days", "")}
         </tr>
       </table>
@@ -1248,17 +1242,22 @@ def _signal_guide() -> str:
     return f"""
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid {C['border']}">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                      color:{C['muted']};margin-bottom:4px">What each signal means</div>
-          <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
-            Each session signal maps to a multiplier representing equivalent human effort. The AI
-            reads all signals together and assigns an estimate within the highest applicable range.
-            <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
-            Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
+                      color:{C['muted']};margin-bottom:4px;cursor:pointer;user-select:none"
+               onclick="toggleSignalGuide()">
+            <span id="signal-guide-arrow" style="margin-right:4px">&#9654;</span>What each signal means
           </div>
-          {tools}
-          {tokens}
-          {lines}
-          {active}
+          <div id="signal-guide-body" style="display:none">
+            <div style="font-size:10px;color:{C['muted']};line-height:1.5;margin-bottom:4px">
+              Each session signal maps to a multiplier representing equivalent human effort. The AI
+              reads all signals together and assigns an estimate within the highest applicable range.
+              <br><strong style="color:{C['text']}">Reading the table:</strong> find your value in the
+              Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
+            </div>
+            {tools}
+            {tokens}
+            {lines}
+            {active}
+          </div>
         </div>"""
 
 
@@ -1357,14 +1356,16 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
     <td style="background:{C['card']};padding:0;
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0">
-        <tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px;
+                cursor:pointer" onclick="toggleEstimation()">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                      color:rgba(255,255,255,0.7)">Estimation Evidence</div>
+                      color:rgba(255,255,255,0.7)">
+            <span id="estimation-arrow" style="margin-right:6px">&#9654;</span>Estimation Evidence</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
             How human effort estimates were calculated &mdash; signal by signal.</div>
         </td></tr>
       </table>
-      <div style="padding:14px 24px 18px">
+      <div id="estimation-body" style="display:none;padding:14px 24px 18px">
         <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
           <strong style="color:{C['text']}">How to read this table:</strong>
           Each row shows a project's raw session data (top) and the hour multiplier each signal
@@ -1503,6 +1504,22 @@ function toggleAllFiles() {
     btn.innerHTML = open ? '&#9654; See all files' : '&#9660; Hide files';
   }
 }
+function toggleEstimation() {
+  var body  = document.getElementById('estimation-body');
+  var arrow = document.getElementById('estimation-arrow');
+  if (!body) return;
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
+}
+function toggleSignalGuide() {
+  var body  = document.getElementById('signal-guide-body');
+  var arrow = document.getElementById('signal-guide-arrow');
+  if (!body) return;
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
+}
 window.onload = function() {
   var hint = document.getElementById('expand-hint');
   if (hint) hint.style.display = 'block';
@@ -1582,6 +1599,12 @@ window.onload = function() {
       <div style="font-size:10px;color:rgba(255,255,255,0.4)">
         <strong style="color:rgba(255,255,255,0.65)">whatidid</strong>
         &nbsp;·&nbsp; Claude &nbsp;·&nbsp; {target_date}
+      </div>
+      <div style="margin-top:6px;font-size:10px;color:rgba(255,255,255,0.35)">
+        Get your own report &rarr;
+        <a href="https://github.com/shailendrahegde/What-I-Did-Claude"
+           style="color:rgba(255,255,255,0.55);text-decoration:none"
+           target="_blank">github.com/shailendrahegde/What-I-Did-Claude</a>
       </div>
     </td>
   </tr>
