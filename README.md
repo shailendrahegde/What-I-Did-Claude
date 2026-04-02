@@ -1,6 +1,6 @@
 <div align="center">
 
-# What I Did — Claude Impact Report
+# 🤖 What I Did — Claude Impact Report
 
 **Turn invisible AI collaboration into a visible story of impact.**
 
@@ -18,34 +18,37 @@
 
 ---
 
-> **"Last week Claude delivered 38 hours of professional services across 6 projects — Software Engineer, Data Analyst, Management Consultant, Solutions Architect, and more."**
+> **"Where did the tokens go? What am I actually building with Claude? Am I accessing skills I didn't have before?"**
 
-That's a real output from this tool. It reads your local Claude Code session logs, classifies every task with AI, and renders a polished report that tells the complete story of your AI-assisted work.
+If you can't answer these confidently, you're not alone. Most people know Claude helps — but can't show *how much*, at *what*, or *why it matters*. This tool turns your local Claude Code session logs into a single report that makes the invisible visible — what got built, what skills were augmented, and what it would have cost to do it alone.
 
-## Report Sections
+## What's in the Report
 
 ### ✅ What Got Accomplished
+
 Every project broken down into goals and tasks with effort estimates, skill tags, and document references. Click any row to expand the full task breakdown. This is the evidence trail.
 
 ### 📦 What Got Produced
-Tangible artifacts — scripts, reports, documents, presentations, config files — categorized and counted. GitHub repos and git operations surfaced automatically.
 
-### 🎯 How I Collaborated
-A donut chart breaking down every interaction by intent — Building, Investigating, Designing, Researching, Iterating, Shipping. See your collaboration signature: were you mostly building, or debugging? Per-project breakdowns show how your approach varied across workstreams.
+Tangible artifacts — scripts, reports, documents, presentations, config files — categorized and counted. Not "Claude helped me code" but "Claude helped me ship 4 Python modules, 2 HTML reports, and a PowerShell deployment script."
 
-### ⏰ When I Worked
-Time-of-day activity patterns with an expandable daily heatmap — see whether you're an early-morning builder or a late-night debugger, with intensity shading across every time slot.
+### 🧠 Skills Claude Augmented
 
-### 🧠 Skills Augmented
 *"This is the team Claude assembled for me — on demand, at zero headcount cost."*
 
-Hours of assistance broken down across **19 professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, Management Consultant, Research Scientist, and more. A ranked bar chart shows exactly which disciplines carried the most weight.
+Hours of assistance mapped across **20+ professional roles** — Software Engineer, Data Analyst, UX Designer, Solutions Architect, Management Consultant, and more. See exactly which disciplines Claude staffed for you, ranked by time invested.
 
-### 🔢 By the Numbers
-The raw metrics: Claude subscription cost vs. market API rates, token breakdown (input, output, cache hits/writes), and model request counts.
+### 🎯 How You Collaborated
+
+Every interaction classified by intent — Building, Researching, Designing, Investigating, Iterating, Shipping. Discover your collaboration signature: is Claude an always-on crutch or a targeted force multiplier?
+
+### ⏰ When You Collaborated
+
+Time-of-day activity patterns with a daily heatmap — spot whether you're an early-morning builder or a late-night debugger, and whether AI assistance is concentrated or spread across your day.
 
 ### 📐 Estimation Evidence
-Collapsible detail showing exactly how effort estimates were calculated — tool invocations, active engagement time, and the deterministic formula behind each number. Full methodology guide included.
+
+Collapsible detail showing the quantitative signals behind every effort number — tool invocations, active engagement time, token volumes, and the deterministic formula. Evidence that Claude isn't just handling boilerplate — it's tackling real complexity.
 
 ## Quick Start
 
