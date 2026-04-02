@@ -10,6 +10,10 @@
 [![Claude](https://img.shields.io/badge/Claude-powered-orange)](https://claude.ai)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+<br>
+
+![What I Did report walkthrough](report.gif)
+
 </div>
 
 ---
