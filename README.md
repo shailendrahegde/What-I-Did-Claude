@@ -6,7 +6,7 @@
 
 *One command generates a polished report on what you built with Claude, how you worked, the skills it augmented, and the leverage it delivered.*
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://python.org)
 [![Claude](https://img.shields.io/badge/Claude-powered-orange)](https://claude.ai)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -140,7 +140,7 @@ See [docs/architecture.md](docs/architecture.md) for session file format details
 
 | Requirement | Why |
 |---|---|
-| **Python 3.10+** | Core runtime — standard library only, no `pip install` needed |
+| **Python 3.9+** | Core runtime — standard library only, no `pip install` needed |
 | **Claude Code** | Session data source — sessions stored at `~/.claude/projects/` |
 | **Anthropic API key** | For semantic analysis. Auto-read from `~/.claude/config.json` if you use API-key auth. OAuth users (signed in via Claude.ai) must set `ANTHROPIC_API_KEY` manually — get one at [console.anthropic.com](https://console.anthropic.com). |
 | **Windows + Outlook** | *(Optional)* For `--email` delivery via PowerShell COM automation |

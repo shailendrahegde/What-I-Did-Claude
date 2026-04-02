@@ -3,6 +3,7 @@ analyze.py — Semantic analysis of the day's Claude sessions.
 Goals = business outcomes (one per session/coherent block of work).
 Tasks = implementation steps within a goal.
 """
+from __future__ import annotations
 import json
 import re
 import urllib.request

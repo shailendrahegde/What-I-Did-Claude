@@ -1,6 +1,7 @@
 """
 harvest.py — Read Claude Code session JSONL files and extract structured activity data.
 """
+from __future__ import annotations
 import ast
 import json
 from datetime import datetime, timezone
