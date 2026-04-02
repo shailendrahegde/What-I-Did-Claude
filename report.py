@@ -974,24 +974,6 @@ def _activity_bar(analysis: dict) -> str:
     <td style="background:{C['subtle']};padding:9px 24px;
                border:1px solid {C['border']};border-top:none">
       <span style="font-size:10px;font-weight:700;text-transform:uppercase;
-                   letter-spacing:0.7px;color:{C['muted']};margin-right:10px">Cost</span>
-      <span style="font-size:11px;color:{C['text']}">
-        <span style="color:{C['muted']}">Claude subscription</span>
-        <strong>${SEAT_COST_PER_MONTH}/mo</strong>
-      </span>
-      &nbsp;&nbsp;·&nbsp;&nbsp;
-      <span style="font-size:11px;color:{C['text']}">
-        <span style="color:{C['muted']}">Market API rate</span>
-        <strong>~${market_cost:.2f}</strong>
-        <span style="font-size:10px;color:{C['muted']}">({tok_str} tokens)</span>
-      </span>
-      {prem_html}
-    </td>
-  </tr>
-  <tr>
-    <td style="background:{C['subtle']};padding:9px 24px;
-               border:1px solid {C['border']};border-top:none">
-      <span style="font-size:10px;font-weight:700;text-transform:uppercase;
                    letter-spacing:0.7px;color:{C['muted']};margin-right:10px">Tokens</span>
       <span style="font-size:11px;color:{C['text']}">
         <span style="color:{C['muted']}">Input</span> <strong>{in_tok:,}</strong>
