@@ -163,12 +163,14 @@ def _narrative_block(goals: list, fallback: str) -> str:
         f'{_fmt_h(total_h)} of professional effort:</div>'
     )
 
-    items = ""
+    TOP = 5
+    visible_items = ""
+    hidden_items  = ""
     for i, g in enumerate(goals):
         label      = g.get("label") or g.get("title", f"Goal {i+1}")
         summary    = g.get("summary", "")
         date_badge = _date_badge(g.get("date", ""))
-        items += (
+        item = (
             f'<div style="display:flex;align-items:baseline;margin-bottom:7px;'
             f'font-size:13px;line-height:1.55">'
             f'<span style="color:{C["accent"]};font-weight:700;min-width:18px;'
@@ -178,8 +180,28 @@ def _narrative_block(goals: list, fallback: str) -> str:
             f'&nbsp;<span style="color:{C["muted"]}">{summary}</span></span>'
             f'</div>'
         )
+        if i < TOP:
+            visible_items += item
+        else:
+            hidden_items += item
 
-    return intro + items
+    extra = n - TOP
+    more_btn = ""
+    more_div = ""
+    if extra > 0:
+        more_div = (
+            f'<div id="narrative-more" style="display:none">{hidden_items}</div>'
+        )
+        more_btn = (
+            f'<div style="margin-top:4px">'
+            f'<span id="narrative-more-btn" data-open="0" '
+            f'onclick="toggleNarrativeMore({extra})" '
+            f'style="cursor:pointer;font-size:12px;color:{C["accent"]};user-select:none">'
+            f'&#9654; See {extra} more project{"s" if extra != 1 else ""}</span>'
+            f'</div>'
+        )
+
+    return intro + visible_items + more_div + more_btn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -273,15 +295,27 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _work_pattern(sessions: list) -> str:
-    """Horizontal bar chart of message counts by time-of-day bucket."""
+    """GHCP-style time-of-day bar chart with 5 named buckets + expandable daily heatmap."""
+    # (label, sub-label, start_hour, end_hour)  Night wraps midnight: 21-24 + 0-5
     BUCKETS = [
-        ("12a–4a",  0,  4),
-        ("4a–8a",   4,  8),
-        ("8a–12p",  8, 12),
-        ("12p–4p", 12, 16),
-        ("4p–8p",  16, 20),
-        ("8p–12a", 20, 24),
+        ("Early Morning", "5–9am",    5,  9),
+        ("Morning",       "9am–12pm", 9, 12),
+        ("Afternoon",     "12–5pm",  12, 17),
+        ("Evening",       "5–9pm",   17, 21),
+        ("Night",         "9pm–5am", 21,  5),  # wraps midnight
     ]
+    BUCKET_LABELS = [b[0] for b in BUCKETS]
+
+    def _bucket_for_hour(h: int) -> str:
+        for label, _, start, end in BUCKETS:
+            if start < end:
+                if start <= h < end:
+                    return label
+            else:  # wraps midnight (Night: 21-24 + 0-5)
+                if h >= start or h < end:
+                    return label
+        return BUCKET_LABELS[-1]
+
     counts = {b[0]: 0 for b in BUCKETS}
     for s in sessions:
         for m in s.get("messages", []):
@@ -290,39 +324,47 @@ def _work_pattern(sessions: list) -> str:
                 continue
             try:
                 local_dt = _utc_to_local(ts)
-                hour = local_dt.hour
-                for label, start, end in BUCKETS:
-                    if start <= hour < end:
-                        counts[label] += 1
-                        break
+                counts[_bucket_for_hour(local_dt.hour)] += 1
             except Exception:
                 pass
 
-    total = sum(counts.values()) or 1
-    max_count = max(counts.values()) or 1
-
+    total = sum(counts.values())
     if total == 0:
         return ""
+    max_count = max(counts.values()) or 1
+    peak_label = max(counts, key=counts.get)
 
     rows = ""
-    for label, _, _ in BUCKETS:
+    for label, sub, _, _ in BUCKETS:
         n   = counts[label]
         pct = n / max_count * 100
+        is_peak = (label == peak_label and n > 0)
+        lbl_style = (f"font-size:12px;font-weight:700;color:{C['text']}"
+                     if is_peak else
+                     f"font-size:12px;color:{C['muted']}")
+        cnt_style = (f"font-size:12px;font-weight:700;color:{C['text']}"
+                     if is_peak else
+                     f"font-size:12px;color:{C['muted']}")
+        peak_tag  = (f'&nbsp;<span style="font-size:11px;color:{C["accent"]}">— Peak</span>'
+                     if is_peak else "")
         rows += f"""
-        <tr>
-          <td style="font-size:11px;color:{C['muted']};padding:3px 8px 3px 0;
-                     white-space:nowrap;width:55px;text-align:right">{label}</td>
-          <td style="padding:3px 0;width:100%">
-            <div style="background:{C['border']};border-radius:3px;height:14px;position:relative">
-              <div style="background:{C['accent']};border-radius:3px;height:14px;
-                          width:{pct:.0f}%;min-width:{2 if n else 0}px"></div>
+        <tr style="height:28px">
+          <td style="padding:4px 12px 4px 0;white-space:nowrap;vertical-align:middle;width:170px">
+            <span style="{lbl_style}">{label}</span>
+            <span style="font-size:10px;color:{C['muted']}"> ({sub})</span>
+          </td>
+          <td style="padding:4px 0;width:100%;vertical-align:middle">
+            <div style="background:#e8f0fe;border-radius:4px;height:16px;position:relative">
+              <div style="background:{C['accent']};border-radius:4px;height:16px;
+                          width:{pct:.1f}%;min-width:{3 if n else 0}px"></div>
             </div>
           </td>
-          <td style="font-size:11px;color:{C['text']};padding:3px 0 3px 8px;
-                     white-space:nowrap">{n}</td>
+          <td style="padding:4px 0 4px 10px;white-space:nowrap;vertical-align:middle">
+            <span style="{cnt_style}">{n} msgs</span>{peak_tag}
+          </td>
         </tr>"""
 
-    daily_detail = _daily_activity_detail(sessions)
+    daily_detail = _daily_activity_detail(sessions, BUCKETS, BUCKET_LABELS)
 
     return f"""
   <tr>
@@ -333,31 +375,46 @@ def _work_pattern(sessions: list) -> str:
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                       color:rgba(255,255,255,0.7)">When I Worked</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-            Your best work doesn&rsquo;t wait for office hours &mdash; and neither does Claude.</div>
+            When Copilot-assisted work happened during the day</div>
         </td></tr>
       </table>
-      <div style="padding:14px 24px 18px">
-        <table cellpadding="0" cellspacing="0" style="width:280px">
+      <div style="padding:16px 24px 18px">
+        <table cellpadding="0" cellspacing="0" style="width:100%">
           {rows}
         </table>
-        <div style="font-size:10px;color:{C['muted']};margin-top:6px">
-          {total} total messages · local time
+        {f'''<div id="daily-detail-hdr" style="margin-top:14px;padding:10px 14px;background:{C['accent_lt']};border-radius:6px;cursor:pointer;border:1px solid rgba(0,120,212,0.15)" onclick="toggleDetail('daily-detail')">
+          <span id="daily-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:6px">&#9654;</span>
+          <span style="font-size:12px;font-weight:600;color:{C['accent']}">See daily breakdown</span>
+          <span style="font-size:11px;color:{C['muted']};margin-left:10px">Hourly activity heatmap per day</span>
         </div>
-        {f'''<div id="daily-detail-hdr" style="margin-top:12px;padding:8px 12px;background:{C['accent_lt']};border-radius:6px;cursor:pointer;border:1px solid rgba(0,120,212,0.15)" onclick="toggleDetail('daily-detail')">
-          <span id="daily-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-          <span style="font-size:11px;font-weight:600;color:{C['accent']}">See daily breakdown</span>
-          <span style="font-size:10px;color:{C['muted']};margin-left:8px">Activity heatmap per day</span>
-        </div>
-        <div id="daily-detail-tasks" style="display:none;margin-top:8px">{daily_detail}</div>''' if daily_detail else ""}
+        <div id="daily-detail-tasks" style="display:none;margin-top:12px">{daily_detail}</div>''' if daily_detail else ""}
       </div>
     </td>
   </tr>"""
 
 
-def _daily_activity_detail(sessions: list) -> str:
-    """Heatmap grid: per day × per time period."""
-    PERIODS = ["12a–8a", "8a–12p", "12p–4p", "4p–8p", "8p–12a"]
-    PERIOD_RANGES = [(0, 8), (8, 12), (12, 16), (16, 20), (20, 24)]
+def _daily_activity_detail(sessions: list, buckets=None, bucket_labels=None) -> str:
+    """GHCP-style heatmap grid: large cells, date+day labels, color legend."""
+    if buckets is None:
+        buckets = [
+            ("Early Morning", "5–9am",    5,  9),
+            ("Morning",       "9am–12pm", 9, 12),
+            ("Afternoon",     "12–5pm",  12, 17),
+            ("Evening",       "5–9pm",   17, 21),
+            ("Night",         "9pm–5am", 21,  5),
+        ]
+    if bucket_labels is None:
+        bucket_labels = [b[0] for b in buckets]
+
+    def _bucket_for_hour(h: int) -> str:
+        for label, _, start, end in buckets:
+            if start < end:
+                if start <= h < end:
+                    return label
+            else:
+                if h >= start or h < end:
+                    return label
+        return bucket_labels[-1]
 
     from collections import defaultdict
     grid = defaultdict(lambda: defaultdict(int))
@@ -371,12 +428,8 @@ def _daily_activity_detail(sessions: list) -> str:
             try:
                 local_dt = _utc_to_local(ts)
                 day_str  = local_dt.strftime("%Y-%m-%d")
-                hour     = local_dt.hour
                 dates_seen.add(day_str)
-                for i, (start, end) in enumerate(PERIOD_RANGES):
-                    if start <= hour < end:
-                        grid[day_str][PERIODS[i]] += 1
-                        break
+                grid[day_str][_bucket_for_hour(local_dt.hour)] += 1
             except Exception:
                 pass
 
@@ -384,59 +437,102 @@ def _daily_activity_detail(sessions: list) -> str:
         return ""
 
     sorted_dates = sorted(dates_seen)
-    max_val = max((grid[d][p] for d in sorted_dates for p in PERIODS), default=1) or 1
+    max_val = max((grid[d][p] for d in sorted_dates for p in bucket_labels), default=1) or 1
 
-    def _cell_bg(n):
+    # 5-level color scale matching GHCP
+    COLORS = ["#e8f0fe", "#c6dafc", "#7ec8f7", "#0078d4", "#1b3a5c"]
+    def _cell_color(n: int) -> str:
         if n == 0:
-            return C["subtle"]
-        intensity = min(n / max_val, 1.0)
-        if intensity < 0.33:
-            return "#c6e6ff"
-        if intensity < 0.66:
-            return "#7ec8f7"
-        return C["accent"]
+            return "#eef0f3"
+        t = min(n / max_val, 1.0)
+        if t < 0.15: return COLORS[0]
+        if t < 0.35: return COLORS[1]
+        if t < 0.60: return COLORS[2]
+        if t < 0.85: return COLORS[3]
+        return COLORS[4]
 
+    def _text_color(n: int) -> str:
+        if n == 0:
+            return "transparent"
+        t = min(n / max_val, 1.0)
+        return "#fff" if t >= 0.35 else C["text"]
+
+    # Column headers
     header_cells = "".join(
-        f'<th style="font-size:9px;color:{C["muted"]};padding:2px 6px;font-weight:600;'
-        f'text-transform:uppercase">{p}</th>'
-        for p in PERIODS
+        f'<th style="padding:0 6px 10px;text-align:center;min-width:110px">'
+        f'<div style="font-size:10px;font-weight:700;color:{C["muted"]};'
+        f'text-transform:uppercase;letter-spacing:0.6px">{label}</div>'
+        f'<div style="font-size:10px;color:{C["muted"]};margin-top:1px">{sub}</div>'
+        f'</th>'
+        for label, sub, _, _ in buckets
     )
 
     body_rows = ""
     for day in sorted_dates:
         try:
             from datetime import date as _date
-            d_label = _date.fromisoformat(day).strftime("%b %-d")
+            d_obj = _date.fromisoformat(day)
+            month_str = d_obj.strftime("%b")
+            day_num   = d_obj.strftime("%d").lstrip("0")
+            dow       = d_obj.strftime("%a")
         except Exception:
-            d_label = day[5:]
+            month_str = day[5:7]
+            day_num   = day[8:]
+            dow       = ""
+
+        row_total = sum(grid[day][p] for p in bucket_labels)
         cells = ""
-        for p in PERIODS:
-            n  = grid[day][p]
-            bg = _cell_bg(n)
+        for p in bucket_labels:
+            n   = grid[day][p]
+            bg  = _cell_color(n)
+            tc  = _text_color(n)
             cells += (
-                f'<td style="background:{bg};padding:5px 8px;text-align:center;'
-                f'font-size:10px;color:{"#fff" if n > 5 else C["text"]};'
-                f'border:1px solid {C["border"]}">'
-                f'{"" if n == 0 else str(n)}</td>'
+                f'<td style="padding:4px 6px;text-align:center">'
+                f'<div style="background:{bg};border-radius:6px;padding:10px 8px;'
+                f'font-size:13px;font-weight:600;color:{tc};min-width:90px;'
+                f'min-height:36px;display:flex;align-items:center;justify-content:center">'
+                f'{"" if n == 0 else str(n)}</div>'
+                f'</td>'
             )
+
         body_rows += (
-            f'<tr><td style="font-size:10px;color:{C["muted"]};padding:2px 8px 2px 0;'
-            f'white-space:nowrap">{d_label}</td>{cells}</tr>'
+            f'<tr>'
+            f'<td style="padding:4px 14px 4px 0;vertical-align:middle;white-space:nowrap">'
+            f'<div style="font-size:12px;font-weight:700;color:{C["text"]}">{month_str}</div>'
+            f'<div style="font-size:13px;font-weight:700;color:{C["text"]};line-height:1">'
+            f'{day_num} <span style="font-size:11px;font-weight:400;color:{C["muted"]}">{dow}</span></div>'
+            f'</td>'
+            f'{cells}'
+            f'<td style="padding:4px 0 4px 10px;font-size:12px;color:{C["muted"]};'
+            f'vertical-align:middle;text-align:right;white-space:nowrap">{row_total}</td>'
+            f'</tr>'
         )
 
-    return f"""<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                color:{C['muted']};margin-bottom:8px">Activity by Day &amp; Period</div>
-      <div style="overflow-x:auto">
-        <table cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+    # Color legend
+    legend_swatches = "".join(
+        f'<span style="display:inline-block;width:18px;height:18px;background:{c};'
+        f'border-radius:3px;margin:0 2px;vertical-align:middle"></span>'
+        for c in COLORS
+    )
+    legend = (
+        f'<div style="text-align:right;margin-top:10px;font-size:10px;color:{C["muted"]}">'
+        f'Less &nbsp;{legend_swatches}&nbsp; More'
+        f'</div>'
+    )
+
+    return f"""<div style="overflow-x:auto">
+        <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;min-width:500px">
           <thead>
             <tr>
-              <th style="padding:2px 8px 2px 0"></th>
+              <th style="padding:0 14px 10px 0"></th>
               {header_cells}
+              <th style="padding:0"></th>
             </tr>
           </thead>
           <tbody>{body_rows}</tbody>
         </table>
-      </div>"""
+      </div>
+      {legend}"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -776,6 +872,41 @@ def _what_got_produced(goals: list, sessions: list) -> str:
     doc_count = len(docs)
     doc_summary = f'<strong style="color:{C["text"]}">{doc_count} file{"s" if doc_count != 1 else ""}</strong> referenced or produced' if doc_count else ""
 
+    # Build "see all files" expandable list grouped by category
+    all_files_html = ""
+    if doc_count:
+        cat_sections = ""
+        for cat, info in DOC_CATS.items():
+            files = cat_files[cat]
+            if not files:
+                continue
+            file_items = "".join(
+                f'<span style="display:inline-block;margin:2px 6px 2px 0;font-size:11px;'
+                f'color:{C["accent"]};font-weight:500">'
+                f'{info["icon"]} {fname}</span>'
+                for fname, _ in files
+            )
+            cat_sections += (
+                f'<div style="margin-bottom:8px">'
+                f'<div style="font-size:9px;font-weight:700;text-transform:uppercase;'
+                f'letter-spacing:0.6px;color:{C["muted"]};margin-bottom:4px">'
+                f'{cat} ({len(files)})</div>'
+                f'<div>{file_items}</div>'
+                f'</div>'
+            )
+        all_files_html = (
+            f'<div style="margin-top:8px">'
+            f'<span id="all-files-btn" data-open="0" onclick="toggleAllFiles()" '
+            f'style="cursor:pointer;font-size:11px;color:{C["accent"]};user-select:none">'
+            f'&#9654; See all files</span>'
+            f'</div>'
+            f'<div id="all-files-list" style="display:none;margin-top:10px;'
+            f'padding:10px 12px;background:{C["subtle"]};border-radius:6px;'
+            f'border:1px solid {C["border"]}">'
+            f'{cat_sections}'
+            f'</div>'
+        )
+
     return f"""
   <tr>
     <td style="background:{C['card']};padding:0;
@@ -791,6 +922,7 @@ def _what_got_produced(goals: list, sessions: list) -> str:
       <div style="padding:14px 24px 18px">
         {f'<div style="font-size:11px;color:{C["muted"]};margin-bottom:10px">{doc_summary}</div>' if doc_summary else ""}
         {f'<table cellpadding="0" cellspacing="0"><tr>{cat_cells}</tr></table>' if cat_cells else ""}
+        {all_files_html}
         {repo_html}
       </div>
     </td>
@@ -1326,23 +1458,6 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
         for p in projects
     )
 
-    # Totals row for goals table
-    totals_row = f"""
-        <tr style="background:{C['accent_lt']}">
-          <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
-          <td style="padding:10px 16px;border-top:2px solid {C['border']};
-                     font-size:12px;font-weight:700;color:{C['accent']}">
-            {len(goals)} goal{'s' if len(goals)!=1 else ''} &nbsp;·&nbsp; {total_tasks} tasks total
-          </td>
-          <td style="padding:10px 16px;border-top:2px solid {C['border']}"></td>
-          <td style="padding:10px 16px;border-top:2px solid {C['border']};
-                     text-align:right;font-size:18px;font-weight:700;color:{C['accent']}">
-            {_fmt_h(total_human_h)}
-          </td>
-        </tr>"""
-
-    goal_rows = _goals_summary(goals)
-
     # Build project-name → session lookup for directory + git context.
     # Include both full decoded names AND last path segment so cached analyses
     # (which stored short names like "whatidid") still resolve correctly.
@@ -1381,6 +1496,36 @@ function toggleFormulaCol() {
   if (btn) {
     btn.setAttribute('data-open', open ? '0' : '1');
     btn.innerHTML = open ? '&#9654; Show formula column' : '&#9660; Hide formula column';
+  }
+}
+function toggleGoalsMore(n) {
+  var extras = document.querySelectorAll('.goal-extra');
+  var btn = document.getElementById('goals-more-btn');
+  var open = btn && btn.getAttribute('data-open') === '1';
+  extras.forEach(function(el) { el.style.display = open ? 'none' : ''; });
+  if (btn) {
+    btn.setAttribute('data-open', open ? '0' : '1');
+    btn.innerHTML = open ? '&#9654; See ' + n + ' more projects' : '&#9660; See fewer';
+  }
+}
+function toggleNarrativeMore(n) {
+  var more = document.getElementById('narrative-more');
+  var btn  = document.getElementById('narrative-more-btn');
+  var open = btn && btn.getAttribute('data-open') === '1';
+  if (more) more.style.display = open ? 'none' : 'block';
+  if (btn) {
+    btn.setAttribute('data-open', open ? '0' : '1');
+    btn.innerHTML = open ? '&#9654; See ' + n + ' more projects' : '&#9660; See fewer';
+  }
+}
+function toggleAllFiles() {
+  var list = document.getElementById('all-files-list');
+  var btn  = document.getElementById('all-files-btn');
+  var open = btn && btn.getAttribute('data-open') === '1';
+  if (list) list.style.display = open ? 'none' : 'block';
+  if (btn) {
+    btn.setAttribute('data-open', open ? '0' : '1');
+    btn.innerHTML = open ? '&#9654; See all files' : '&#9660; Hide files';
   }
 }
 window.onload = function() {
@@ -1437,17 +1582,6 @@ window.onload = function() {
             {len(goals)} project{'s' if len(goals) != 1 else ''} &middot; {total_tasks} task{'s' if total_tasks != 1 else ''} &middot; {_fmt_h(total_human_h)} estimated effort</div>
         </td></tr>
       </table>
-      <div style="padding:0 24px 0">
-        <table width="100%" cellpadding="0" cellspacing="0"
-               style="border:1px solid {C['border']};border-radius:7px;overflow:hidden;margin:14px 0 8px">
-          {goal_rows}
-          {totals_row}
-        </table>
-        <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
-                                      text-align:right;margin-bottom:8px">
-          Click any row to expand task breakdown
-        </div>
-      </div>
       <!-- Inline task accordion -->
       <table width="100%" cellpadding="0" cellspacing="0">
         {_goal_detail_headers(goals, session_lookup, session_metrics)}
@@ -1610,6 +1744,8 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None,
         session_lookup = {}
     if session_metrics is None:
         session_metrics = {}
+    TOP = 5
+    extra = max(0, len(goals) - TOP)
     html = ""
     for i, g in enumerate(goals):
         gid   = f"goal-{i}"
@@ -1619,9 +1755,13 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None,
 
         evidence_html = _evidence_strip(g, session_metrics) if session_metrics else ""
 
+        # Goals beyond TOP are hidden; toggled by the "see more" row
+        extra_class = ' class="goal-extra"' if i >= TOP else ""
+        hdr_style = f"cursor:pointer;background:{C['card']}{';display:none' if i >= TOP else ''}"
+
         # Clickable goal header row
         html += f"""
-        <tr id="{gid}-hdr" style="cursor:pointer;background:{C['card']}"
+        <tr id="{gid}-hdr"{extra_class} style="{hdr_style}"
             onclick="toggleDetail('{gid}')">
           <td style="padding:11px 24px;border-bottom:1px solid {C['border']}">
             <table width="100%" cellpadding="0" cellspacing="0">
@@ -1645,7 +1785,7 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None,
         </tr>
 
         <!-- Hidden task rows for this goal -->
-        <tr id="{gid}-tasks" style="display:none">
+        <tr id="{gid}-tasks"{extra_class} style="display:none">
           <td style="padding:0 16px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
             {evidence_html}
@@ -1665,6 +1805,21 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None,
               </tr>
               {_task_rows(tasks)}
             </table>
+          </td>
+        </tr>"""
+
+        # After the 5th goal, insert the "see more" toggle row
+        if i == TOP - 1 and extra > 0:
+            html += f"""
+        <tr id="goals-more-hdr">
+          <td style="padding:9px 24px;border-bottom:1px solid {C['border']};
+                     background:{C['subtle']}">
+            <span id="goals-more-btn" data-open="0"
+                  onclick="toggleGoalsMore({extra})"
+                  style="cursor:pointer;font-size:12px;color:{C['accent']};
+                         user-select:none;font-weight:500">
+              &#9654; See {extra} more project{"s" if extra != 1 else ""}
+            </span>
           </td>
         </tr>"""
 
