@@ -273,67 +273,54 @@ def _leverage_banner(goals: list, analysis: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _work_pattern(sessions: list) -> str:
-    """Time-of-day message distribution using named buckets matching GHCP style."""
-    from datetime import datetime as _dt
-
-    buckets = {
-        "Early Morning (5\u20139am)":  0,
-        "Morning (9am\u201312pm)":     0,
-        "Afternoon (12\u20135pm)":     0,
-        "Evening (5\u20139pm)":        0,
-        "Night (9pm\u20135am)":        0,
-    }
-
-    def _bucket_for_hour(h: int) -> str:
-        if 5 <= h < 9:   return "Early Morning (5\u20139am)"
-        if 9 <= h < 12:  return "Morning (9am\u201312pm)"
-        if 12 <= h < 17: return "Afternoon (12\u20135pm)"
-        if 17 <= h < 21: return "Evening (5\u20139pm)"
-        return "Night (9pm\u20135am)"
-
+    """Horizontal bar chart of message counts by time-of-day bucket."""
+    BUCKETS = [
+        ("12a–4a",  0,  4),
+        ("4a–8a",   4,  8),
+        ("8a–12p",  8, 12),
+        ("12p–4p", 12, 16),
+        ("4p–8p",  16, 20),
+        ("8p–12a", 20, 24),
+    ]
+    counts = {b[0]: 0 for b in BUCKETS}
     for s in sessions:
-        for msg in s.get("messages", []):
-            ts = msg.get("timestamp", "")
+        for m in s.get("messages", []):
+            ts = m.get("timestamp", "")
             if not ts:
                 continue
             try:
-                dt = _utc_to_local(ts)
-                buckets[_bucket_for_hour(dt.hour)] += 1
-            except (ValueError, TypeError):
+                local_dt = _utc_to_local(ts)
+                hour = local_dt.hour
+                for label, start, end in BUCKETS:
+                    if start <= hour < end:
+                        counts[label] += 1
+                        break
+            except Exception:
                 pass
 
-    total = sum(buckets.values())
+    total = sum(counts.values()) or 1
+    max_count = max(counts.values()) or 1
+
     if total == 0:
         return ""
 
-    max_count = max(buckets.values()) or 1
-    peak_bucket = max(buckets, key=buckets.get)
-
     rows = ""
-    for label, count in buckets.items():
-        bar_width = int(count / max_count * 100) if max_count else 0
-        is_peak = label == peak_bucket
-        label_style = (
-            f"font-size:11px;font-weight:{'700' if is_peak else '400'};"
-            f"color:{C['text'] if is_peak else C['muted']};white-space:nowrap"
-        )
-        peak_tag = (
-            f' <span style="font-size:9px;color:{C["accent"]};font-weight:700">&larr; Peak</span>'
-            if is_peak else ""
-        )
+    for label, _, _ in BUCKETS:
+        n   = counts[label]
+        pct = n / max_count * 100
         rows += f"""
-          <tr>
-            <td style="padding:3px 12px 3px 0;{label_style};width:160px">{label}</td>
-            <td style="padding:3px 0;width:auto">
-              <div style="background:{C['accent_lt']};border-radius:4px;height:16px;width:100%">
-                <div style="background:{C['accent']};border-radius:4px;height:16px;width:{bar_width}%;
-                            min-width:{2 if count else 0}px"></div>
-              </div>
-            </td>
-            <td style="padding:3px 0 3px 10px;{label_style};width:80px">
-              {count}{peak_tag}
-            </td>
-          </tr>"""
+        <tr>
+          <td style="font-size:11px;color:{C['muted']};padding:3px 8px 3px 0;
+                     white-space:nowrap;width:55px;text-align:right">{label}</td>
+          <td style="padding:3px 0;width:100%">
+            <div style="background:{C['border']};border-radius:3px;height:14px;position:relative">
+              <div style="background:{C['accent']};border-radius:3px;height:14px;
+                          width:{pct:.0f}%;min-width:{2 if n else 0}px"></div>
+            </div>
+          </td>
+          <td style="font-size:11px;color:{C['text']};padding:3px 0 3px 8px;
+                     white-space:nowrap">{n}</td>
+        </tr>"""
 
     daily_detail = _daily_activity_detail(sessions)
 
@@ -346,20 +333,26 @@ def _work_pattern(sessions: list) -> str:
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                       color:rgba(255,255,255,0.7)">When I Worked</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-            When Claude-assisted work happened during the day</div>
+            Your best work doesn&rsquo;t wait for office hours &mdash; and neither does Claude.</div>
         </td></tr>
       </table>
       <div style="padding:14px 24px 18px">
-        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:420px">
+        <table cellpadding="0" cellspacing="0" style="width:280px">
           {rows}
         </table>
         <div style="font-size:10px;color:{C['muted']};margin-top:6px">
-          {total} total messages &middot; local time
+          {total} total messages · local time
         </div>
-        {f'<div id="daily-detail-hdr" style="margin-top:12px;padding:8px 12px;background:{C["accent_lt"]};border-radius:6px;cursor:pointer;border:1px solid rgba(0,120,212,0.15)" onclick="toggleDetail(\'daily-detail\')"><span id="daily-detail-arrow" style="font-size:10px;color:{C["accent"]};margin-right:5px">&#9654;</span><span style="font-size:11px;font-weight:600;color:{C["accent"]}">See daily breakdown</span><span style="font-size:10px;color:{C["muted"]};margin-left:8px">Activity heatmap per day</span></div><div id="daily-detail-tasks" style="display:none;margin-top:8px">{daily_detail}</div>' if daily_detail else ""}
+        {f'''<div id="daily-detail-hdr" style="margin-top:12px;padding:8px 12px;background:{C['accent_lt']};border-radius:6px;cursor:pointer;border:1px solid rgba(0,120,212,0.15)" onclick="toggleDetail('daily-detail')">
+          <span id="daily-detail-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
+          <span style="font-size:11px;font-weight:600;color:{C['accent']}">See daily breakdown</span>
+          <span style="font-size:10px;color:{C['muted']};margin-left:8px">Activity heatmap per day</span>
+        </div>
+        <div id="daily-detail-tasks" style="display:none;margin-top:8px">{daily_detail}</div>''' if daily_detail else ""}
       </div>
     </td>
   </tr>"""
+
 
 def _daily_activity_detail(sessions: list) -> str:
     """Heatmap grid: per day × per time period."""
@@ -431,12 +424,8 @@ def _daily_activity_detail(sessions: list) -> str:
             f'white-space:nowrap">{d_label}</td>{cells}</tr>'
         )
 
-    return f"""
-  <tr>
-    <td style="background:{C['card']};padding:0 24px 18px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
-                  color:{C['muted']};margin-bottom:8px">Activity by Day &amp; Period</div>
+    return f"""<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;
+                color:{C['muted']};margin-bottom:8px">Activity by Day &amp; Period</div>
       <div style="overflow-x:auto">
         <table cellpadding="0" cellspacing="0" style="border-collapse:collapse">
           <thead>
@@ -447,9 +436,7 @@ def _daily_activity_detail(sessions: list) -> str:
           </thead>
           <tbody>{body_rows}</tbody>
         </table>
-      </div>
-    </td>
-  </tr>"""
+      </div>"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -704,10 +691,9 @@ def _what_got_produced(goals: list, sessions: list) -> str:
             if d and d not in docs:
                 docs[d] = g.get("project", "")
 
-    # Collect GitHub repos, git ops, and pull requests from sessions
+    # Collect GitHub repos and git ops from sessions
     git_repos: dict = {}    # repo → project
     git_ops_by_proj: dict = {}  # project → set of op types
-    pull_requests: list = []
     for s in sessions:
         proj = s.get("project", "")
         for repo in s.get("git_repos", []):
@@ -721,12 +707,10 @@ def _what_got_produced(goals: list, sessions: list) -> str:
                 ops.add("push")
             elif "commit" in op_lower:
                 ops.add("commit")
-        for pr in s.get("pull_requests", []):
-            pull_requests.append(pr)
         if ops:
             git_ops_by_proj.setdefault(proj, set()).update(ops)
 
-    if not docs and not git_repos and not git_ops_by_proj and not pull_requests:
+    if not docs and not git_repos and not git_ops_by_proj:
         return ""
 
     # Doc file categories
@@ -792,21 +776,6 @@ def _what_got_produced(goals: list, sessions: list) -> str:
     doc_count = len(docs)
     doc_summary = f'<strong style="color:{C["text"]}">{doc_count} file{"s" if doc_count != 1 else ""}</strong> referenced or produced' if doc_count else ""
 
-    pr_html = ""
-    if pull_requests:
-        pr_items = ""
-        for url in pull_requests[:8]:
-            slug = url.replace("https://github.com/", "").rstrip("/")
-            pr_items += (
-                f'<div style="margin-bottom:4px">'
-                f'<span style="font-size:11px;color:{C["accent"]};font-weight:600">&#128204; </span>'
-                f'<a href="{url}" style="font-size:11px;color:{C["accent"]};text-decoration:none">{slug}</a>'
-                f'</div>'
-            )
-        pr_html = (f'<div style="margin-top:10px"><div style="font-size:9px;font-weight:700;'
-                   f'text-transform:uppercase;letter-spacing:0.8px;color:{C["muted"]};margin-bottom:6px">'
-                   f'Pull Requests</div>{pr_items}</div>')
-
     return f"""
   <tr>
     <td style="background:{C['card']};padding:0;
@@ -823,7 +792,6 @@ def _what_got_produced(goals: list, sessions: list) -> str:
         {f'<div style="font-size:11px;color:{C["muted"]};margin-bottom:10px">{doc_summary}</div>' if doc_summary else ""}
         {f'<table cellpadding="0" cellspacing="0"><tr>{cat_cells}</tr></table>' if cat_cells else ""}
         {repo_html}
-        {pr_html}
       </div>
     </td>
   </tr>"""
@@ -1279,10 +1247,10 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
                       color:rgba(255,255,255,0.7)">Estimation Evidence</div>
           <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-            How effort estimates were derived from session signals</div>
+            How human effort estimates were calculated &mdash; signal by signal.</div>
         </td></tr>
       </table>
-      <div style="padding:14px 24px 20px">
+      <div style="padding:14px 24px 18px">
         <div style="font-size:11px;color:{C['muted']};margin-bottom:10px;line-height:1.6">
           <strong style="color:{C['text']}">How to read this table:</strong>
           Each row shows a project's raw session data (top) and the hour multiplier each signal
@@ -1351,6 +1319,13 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
     total_tasks   = sum(len(g.get("tasks", [])) for g in goals)
 
+    project_pills = "".join(
+        f'<span style="background:rgba(255,255,255,0.18);color:#fff;padding:2px 10px;'
+        f'border-radius:10px;font-size:11px;margin-right:5px;display:inline-block;'
+        f'margin-bottom:3px;border:1px solid rgba(255,255,255,0.3)">{p}</span>'
+        for p in projects
+    )
+
     # Totals row for goals table
     totals_row = f"""
         <tr style="background:{C['accent_lt']}">
@@ -1368,18 +1343,6 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
 
     goal_rows = _goals_summary(goals)
 
-    see_more_goals = ""
-    if len(goals) > 5:
-        extra = len(goals) - 5
-        see_more_goals = f"""
-        <tr id="goals-summary-more-hdr" style="background:{C['accent_lt']};cursor:pointer"
-            onclick="toggleGoalsSummary()">
-          <td colspan="4" style="padding:8px 16px;border-top:1px solid {C['border']}">
-            <span id="goals-summary-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-            <span style="font-size:11px;font-weight:600;color:{C['accent']}">See {extra} more</span>
-          </td>
-        </tr>"""
-
     # Build project-name → session lookup for directory + git context.
     # Include both full decoded names AND last path segment so cached analyses
     # (which stored short names like "whatidid") still resolve correctly.
@@ -1396,8 +1359,9 @@ function toggleDetail(id) {
   var arrow  = document.getElementById(id + '-arrow');
   var hdr    = document.getElementById(id + '-hdr');
   if (!tasks) return;
-  var open = tasks.style.display === 'table-row';
-  tasks.style.display      = open ? 'none'      : 'table-row';
+  var showVal = tasks.tagName.toLowerCase() === 'tr' ? 'table-row' : 'block';
+  var open = tasks.style.display === showVal;
+  tasks.style.display      = open ? 'none'      : showVal;
   hdr.style.background     = open ? ''           : '#e8f2fb';
   if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
 }
@@ -1408,25 +1372,6 @@ function toggleFormula(id) {
   var open = el.style.display !== 'none';
   el.style.display = open ? 'none' : 'block';
   if (arrow) arrow.innerHTML = open ? '&#9654; formula' : '&#9660; formula';
-}
-function toggleGoalsMore() {
-  var rows = document.getElementById('goals-more-rows');
-  var arrow = document.getElementById('goals-more-arrow');
-  var hdr = document.getElementById('goals-more-hdr');
-  if (!rows) return;
-  var open = rows.style.display !== 'none';
-  rows.style.display = open ? 'none' : 'table-row';
-  if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
-  if (hdr) hdr.style.background = open ? '' : '#e8f2fb';
-}
-function toggleGoalsSummary() {
-  var rows = document.querySelectorAll('.goals-extra');
-  var arrow = document.getElementById('goals-summary-arrow');
-  var hdr = document.getElementById('goals-summary-more-hdr');
-  var open = hdr && hdr.getAttribute('data-open') === '1';
-  rows.forEach(function(r) { r.style.display = open ? 'none' : ''; });
-  if (hdr) hdr.setAttribute('data-open', open ? '0' : '1');
-  if (arrow) arrow.innerHTML = open ? '&#9654;' : '&#9660;';
 }
 function toggleFormulaCol() {
   var cols = document.querySelectorAll('.formula-col');
@@ -1466,6 +1411,7 @@ window.onload = function() {
                   text-transform:uppercase;margin-bottom:4px">{target_date} &nbsp;·&nbsp; Daily Digest</div>
       <div style="font-size:20px;font-weight:700;color:#fff;line-height:1.3">{headline}</div>
       {f'<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.8)">Focus: <strong>{focus}</strong></div>' if focus else ''}
+      {f'<div style="margin-top:8px">{project_pills}</div>' if projects else ''}
     </td>
   </tr>
 
@@ -1495,7 +1441,6 @@ window.onload = function() {
         <table width="100%" cellpadding="0" cellspacing="0"
                style="border:1px solid {C['border']};border-radius:7px;overflow:hidden;margin:14px 0 8px">
           {goal_rows}
-          {see_more_goals}
           {totals_row}
         </table>
         <div id="expand-hint" style="display:none;font-size:11px;color:{C['muted']};
@@ -1569,7 +1514,7 @@ def _doc_refs_html(docs: list) -> str:
 
 
 def _goals_summary(goals: list) -> str:
-    """Summary table rows — top 5 visible, rest collapsible."""
+    """Summary table — skill pills + doc references per goal."""
     rows = ""
     for i, g in enumerate(goals):
         n            = len(g.get("tasks", []))
@@ -1580,11 +1525,10 @@ def _goals_summary(goals: list) -> str:
         task_sub     = f'{n} task{"s" if n != 1 else ""}'
         docs         = g.get("docs_referenced", [])
         doc_html     = _doc_refs_html(docs)
-        date_badge   = _date_badge(g.get("date", ""))
 
-        extra_style  = ' class="goals-extra" style="display:none"' if i >= 5 else ""
+        date_badge = _date_badge(g.get("date", ""))
         rows += f"""
-        <tr{extra_style} style="background:{bg}">
+        <tr style="background:{bg}">
           <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
                      vertical-align:top;width:5%">
             <div style="width:22px;height:22px;background:{C['accent']};border-radius:50%;
@@ -1659,13 +1603,14 @@ def _goal_context_bar(g: dict, session_lookup: dict) -> str:
             + "".join(parts) + "</div>")
 
 
-def _goal_detail_headers(goals: list, session_lookup: dict = None, session_metrics: dict = None) -> str:
+def _goal_detail_headers(goals: list, session_lookup: dict = None,
+                          session_metrics: dict = None) -> str:
+    """Interleaved goal header + hidden task detail rows for the detail table."""
     if session_lookup is None:
         session_lookup = {}
     if session_metrics is None:
         session_metrics = {}
-    visible_html = ""
-    hidden_html  = ""
+    html = ""
     for i, g in enumerate(goals):
         gid   = f"goal-{i}"
         tasks = g.get("tasks", [])
@@ -1674,7 +1619,8 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None, session_metri
 
         evidence_html = _evidence_strip(g, session_metrics) if session_metrics else ""
 
-        block = f"""
+        # Clickable goal header row
+        html += f"""
         <tr id="{gid}-hdr" style="cursor:pointer;background:{C['card']}"
             onclick="toggleDetail('{gid}')">
           <td style="padding:11px 24px;border-bottom:1px solid {C['border']}">
@@ -1697,6 +1643,8 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None, session_metri
             </table>
           </td>
         </tr>
+
+        <!-- Hidden task rows for this goal -->
         <tr id="{gid}-tasks" style="display:none">
           <td style="padding:0 16px 12px;background:{C['bg']}">
             {_goal_context_bar(g, session_lookup)}
@@ -1720,34 +1668,7 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None, session_metri
           </td>
         </tr>"""
 
-        if i < 5:
-            visible_html += block
-        else:
-            hidden_html += block
-
-    if not hidden_html:
-        return visible_html
-
-    extra_count = len(goals) - 5
-    toggle_row = f"""
-        <tr id="goals-more-hdr" style="background:{C['accent_lt']};cursor:pointer"
-            onclick="toggleGoalsMore()">
-          <td style="padding:10px 24px;border-bottom:1px solid {C['border']}">
-            <span id="goals-more-arrow" style="font-size:10px;color:{C['accent']};margin-right:5px">&#9654;</span>
-            <span style="font-size:12px;font-weight:600;color:{C['accent']}">
-              See {extra_count} more goal{'s' if extra_count != 1 else ''}
-            </span>
-          </td>
-        </tr>
-        <tr id="goals-more-rows" style="display:none">
-          <td style="padding:0">
-            <table width="100%" cellpadding="0" cellspacing="0">
-              {hidden_html}
-            </table>
-          </td>
-        </tr>"""
-
-    return visible_html + toggle_row
+    return html
 
 
 def _task_rows(tasks: list) -> str:
