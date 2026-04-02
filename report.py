@@ -1451,13 +1451,6 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
     total_tasks   = sum(len(g.get("tasks", [])) for g in goals)
 
-    project_pills = "".join(
-        f'<span style="background:rgba(255,255,255,0.18);color:#fff;padding:2px 10px;'
-        f'border-radius:10px;font-size:11px;margin-right:5px;display:inline-block;'
-        f'margin-bottom:3px;border:1px solid rgba(255,255,255,0.3)">{p}</span>'
-        for p in projects
-    )
-
     # Build project-name → session lookup for directory + git context.
     # Include both full decoded names AND last path segment so cached analyses
     # (which stored short names like "whatidid") still resolve correctly.
@@ -1556,7 +1549,6 @@ window.onload = function() {
                   text-transform:uppercase;margin-bottom:4px">{target_date} &nbsp;·&nbsp; Daily Digest</div>
       <div style="font-size:20px;font-weight:700;color:#fff;line-height:1.3">{headline}</div>
       {f'<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.8)">Focus: <strong>{focus}</strong></div>' if focus else ''}
-      {f'<div style="margin-top:8px">{project_pills}</div>' if projects else ''}
     </td>
   </tr>
 

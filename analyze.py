@@ -476,6 +476,8 @@ def _attach_metrics(result: dict, sessions: list, session_metrics: dict | None =
     result["session_metrics"]  = session_metrics
     result["sessions_count"]   = len(sessions)
     result["projects"]         = list({s["project"] for s in sessions})
+    result["lines_added"]      = sum(s.get("lines_added", 0) for s in sessions)
+    result["lines_removed"]    = sum(s.get("lines_removed", 0) for s in sessions)
     # Ensure tokens total is present
     tok = result.get("tokens", {})
     if tok and "total" not in tok:
