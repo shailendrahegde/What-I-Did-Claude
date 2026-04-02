@@ -4,7 +4,7 @@
 
 **Turn invisible AI collaboration into a visible story of impact.**
 
-*One command. Every session harvested. Every task classified. A polished report that shows what you accomplished, how you collaborated, and what it would have cost without Claude.*
+*One command generates a polished report on what you built with Claude, how you worked, the skills it augmented, and the leverage it delivered.*
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![Claude](https://img.shields.io/badge/Claude-powered-orange)](https://claude.ai)
