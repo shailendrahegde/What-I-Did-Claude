@@ -50,16 +50,50 @@ PROFESSIONAL_ROLES = (
 
 def _get_api_key() -> str:
     import os
-    # Optional override — useful in CI or non-Claude-Code environments
-    if key := os.environ.get("ANTHROPIC_API_KEY"):
+    # 1. Explicit env var override — works for everyone including OAuth users
+    if key := os.environ.get("ANTHROPIC_API_KEY", "").strip():
         return key
-    # Primary source: the key Claude Code itself uses (~/.claude/config.json)
-    # Always present for Claude Code users — no extra setup needed
+    # 2. Claude Code API-key auth — stored in ~/.claude/config.json
     try:
         config = json.loads((Path.home() / ".claude" / "config.json").read_text(encoding="utf-8"))
-        return config.get("primaryApiKey", "")
+        if key := config.get("primaryApiKey", "").strip():
+            return key
     except Exception:
-        return ""
+        pass
+    return ""
+
+
+def _explain_missing_key() -> None:
+    """Print a clear, actionable message when no API key can be found."""
+    claude_dir = Path.home() / ".claude"
+    has_config  = (claude_dir / "config.json").exists()
+    # Detect OAuth-only setup: config exists but primaryApiKey is absent/empty
+    oauth_mode = False
+    if has_config:
+        try:
+            cfg = json.loads((claude_dir / "config.json").read_text(encoding="utf-8"))
+            oauth_mode = not cfg.get("primaryApiKey", "").strip()
+        except Exception:
+            pass
+
+    if oauth_mode:
+        print(
+            "  NOTE: You signed in to Claude Code via Claude.ai (OAuth).\n"
+            "  This tool calls the Anthropic API directly and needs a separate API key.\n"
+            "  Get one at https://console.anthropic.com → API Keys, then:\n"
+            "    export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "  Falling back to heuristic analysis for now."
+        )
+    elif not has_config:
+        print(
+            "  NOTE: ~/.claude/config.json not found.\n"
+            "  If you signed in via Claude.ai (OAuth), set your API key manually:\n"
+            "    export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "  Get a key at https://console.anthropic.com → API Keys.\n"
+            "  Falling back to heuristic analysis for now."
+        )
+    else:
+        print("  (No API key found — using heuristic analysis.)")
 
 
 def check_api_health() -> tuple:
@@ -72,7 +106,7 @@ def check_api_health() -> tuple:
     """
     api_key = _get_api_key()
     if not api_key:
-        return ("auth", "No API key found (checked ANTHROPIC_API_KEY and ~/.claude/config.json)")
+        return ("auth", "No API key found. Set ANTHROPIC_API_KEY or add primaryApiKey to ~/.claude/config.json")
 
     payload = json.dumps({
         "model": MODEL,
@@ -247,7 +281,7 @@ def analyze_day(
 
     api_key = _get_api_key()
     if not api_key:
-        print("  (No API key found — using heuristic analysis.)")
+        _explain_missing_key()
         result = _fallback_analysis(target_date, sessions)
         result["tokens"] = total_tokens
         _attach_metrics(result, sessions)
