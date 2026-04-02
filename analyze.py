@@ -63,6 +63,37 @@ def _get_api_key() -> str:
     return ""
 
 
+def _claude_cli_available() -> bool:
+    """Return True if the `claude` CLI is on PATH and responds to --version."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, timeout=10, check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _claude_cli_analyze(prompt: str) -> str:
+    """
+    Run `claude -p <prompt>` and return the raw text output.
+    Raises subprocess.SubprocessError / TimeoutExpired on failure.
+    """
+    import subprocess
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True, text=True, timeout=180,
+        encoding="utf-8", errors="replace",
+    )
+    if result.returncode != 0:
+        raise subprocess.SubprocessError(
+            f"claude -p exited {result.returncode}: {result.stderr[:200]}"
+        )
+    return result.stdout.strip()
+
+
 def _explain_missing_key() -> None:
     """Print a clear, actionable message when no API key can be found."""
     claude_dir = Path.home() / ".claude"
@@ -78,18 +109,19 @@ def _explain_missing_key() -> None:
 
     if oauth_mode:
         print(
-            "  NOTE: You signed in to Claude Code via Claude.ai (OAuth).\n"
-            "  This tool calls the Anthropic API directly and needs a separate API key.\n"
-            "  Get one at https://console.anthropic.com → API Keys, then:\n"
-            "    export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "  NOTE: You signed in to Claude Code via Claude.ai (OAuth) and the `claude` CLI\n"
+            "  was not found on PATH. This tool needs one of:\n"
+            "    1. The `claude` CLI installed (npm install -g @anthropic-ai/claude-code)\n"
+            "    2. An API key: export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "       (get one at https://console.anthropic.com → API Keys)\n"
             "  Falling back to heuristic analysis for now."
         )
     elif not has_config:
         print(
-            "  NOTE: ~/.claude/config.json not found.\n"
-            "  If you signed in via Claude.ai (OAuth), set your API key manually:\n"
-            "    export ANTHROPIC_API_KEY=sk-ant-...\n"
-            "  Get a key at https://console.anthropic.com → API Keys.\n"
+            "  NOTE: ~/.claude/config.json not found and `claude` CLI not on PATH.\n"
+            "  To enable AI analysis, either:\n"
+            "    1. Install Claude Code: npm install -g @anthropic-ai/claude-code\n"
+            "    2. Set an API key: export ANTHROPIC_API_KEY=sk-ant-...\n"
             "  Falling back to heuristic analysis for now."
         )
     else:
@@ -281,11 +313,14 @@ def analyze_day(
 
     api_key = _get_api_key()
     if not api_key:
-        _explain_missing_key()
-        result = _fallback_analysis(target_date, sessions)
-        result["tokens"] = total_tokens
-        _attach_metrics(result, sessions)
-        return result
+        if _claude_cli_available():
+            print("  (No API key — using `claude -p` via your Claude Code session.)")
+        else:
+            _explain_missing_key()
+            result = _fallback_analysis(target_date, sessions)
+            result["tokens"] = total_tokens
+            _attach_metrics(result, sessions)
+            return result
 
     # Build session metrics before calling the API so we can include them in
     # calibration signals for the prompt
@@ -448,27 +483,30 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
   ]
 }}"""
 
-    payload = json.dumps({
-        "model": MODEL,
-        "max_tokens": 4000,
-        "temperature": 0,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        API_URL, data=payload,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            response = json.loads(resp.read().decode("utf-8"))
-        raw = response["content"][0]["text"].strip()
+        if api_key:
+            payload = json.dumps({
+                "model": MODEL,
+                "max_tokens": 4000,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                API_URL, data=payload,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                response = json.loads(resp.read().decode("utf-8"))
+            raw = response["content"][0]["text"].strip()
+        else:
+            # OAuth users: delegate to the claude CLI using their session auth
+            raw = _claude_cli_analyze(prompt)
+
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         analysis = json.loads(raw)
@@ -489,8 +527,8 @@ Return ONLY this JSON (no markdown fences, no explanation before or after):
         body = e.read().decode()[:300]
         print(f"  API error {e.code}: {body}")
         print("  Falling back to heuristic analysis.")
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
-        print(f"  API call failed ({e}). Falling back to heuristic analysis.")
+    except Exception as e:
+        print(f"  Analysis failed ({e}). Falling back to heuristic analysis.")
 
     result = _fallback_analysis(target_date, sessions)
     result["tokens"] = total_tokens

@@ -180,13 +180,13 @@ Analysis results are cached in `cache/YYYY-MM-DD.json`. Re-running for the same 
 
 **No sessions found** — Claude Code stores sessions in `~/.claude/projects/*/session.jsonl`. Make sure you've used Claude Code on the target date.
 
-**Heuristic analysis instead of semantic** — no API key found. Two common causes:
+**Heuristic analysis instead of semantic** — no API key found. The tool tries three paths in order:
 
-- *API-key auth*: check that `~/.claude/config.json` contains a non-empty `primaryApiKey` field.
-- *OAuth auth* (signed in via Claude.ai): Claude Code doesn't store an API key locally. Get one at [console.anthropic.com](https://console.anthropic.com) → API Keys and set it manually:
-  ```bash
-  export ANTHROPIC_API_KEY=sk-ant-...
-  ```
+1. `ANTHROPIC_API_KEY` env var
+2. `primaryApiKey` in `~/.claude/config.json` (API-key auth)
+3. `claude -p` via your existing Claude Code session (OAuth auth — no key needed)
+
+If all three fail, it falls back to heuristic. Most common fix for OAuth users: make sure the `claude` CLI is on your PATH (`claude --version` should work). If your org blocks API key creation and the CLI isn't available, heuristic analysis is the only option.
 
 **Email not sending** — requires Windows with Outlook installed and signed in. The PowerShell COM automation uses your active Outlook profile.
 
