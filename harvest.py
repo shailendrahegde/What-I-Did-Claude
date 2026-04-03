@@ -402,8 +402,16 @@ def get_sessions_for_date(target_date: str) -> list:
                             # Attach to the most recent user instruction
                             if messages and messages[-1]["role"] == "user":
                                 messages[-1]["tools_after"].append(tool_summary)
+                            # Count lines written via Edit/Write tool calls
+                            tool_name = item.get("name", "")
+                            if tool_name == "Edit":
+                                new_str = parsed_input.get("new_string", "") or ""
+                                lines_added_count += len(str(new_str).splitlines())
+                            elif tool_name == "Write":
+                                content_str = parsed_input.get("content", "") or ""
+                                lines_added_count += len(str(content_str).splitlines())
                             # Track git/gh operations and GitHub repo slugs
-                            if item.get("name") == "Bash":
+                            if tool_name == "Bash":
                                 cmd = parsed_input.get("command", "")
                                 desc = parsed_input.get("description", "")
                                 text = (desc or cmd)[:200]
@@ -430,6 +438,26 @@ def get_sessions_for_date(target_date: str) -> list:
                     if not session_start:
                         session_start = ts
                     session_end = ts
+
+        # Read .git/config from cwd to get the git repo slug (more reliable than
+        # parsing bash commands, which only catches push/remote/clone)
+        if cwd_seen and not git_repos:
+            try:
+                git_config = Path(cwd_seen) / ".git" / "config"
+                if git_config.exists():
+                    cfg_text = git_config.read_text(encoding="utf-8", errors="replace")
+                    for gm in _re.finditer(
+                        r'url\s*=\s*.*?github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?\s*$',
+                        cfg_text, _re.MULTILINE
+                    ):
+                        slug = gm.group(1).rstrip("/")
+                        parts = slug.split("/")
+                        if (len(parts) == 2
+                                and parts[0] not in ("org", "user", "owner", "username")
+                                and parts[1] not in ("repo", "repository", "project")):
+                            git_repos.add(slug)
+            except Exception:
+                pass
 
         # Only include sessions that have at least one real user instruction
         user_messages = [m for m in messages if m["role"] == "user"]

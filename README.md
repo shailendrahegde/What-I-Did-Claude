@@ -61,7 +61,9 @@ cd ~/claude/whatidid
 
 ### 2. API key
 
-No setup needed if you use Claude Code — the tool reads your key directly from `~/.claude/config.json`.
+No setup needed if you use Claude Code:
+- **API-key auth** — key is read automatically from `~/.claude/config.json`
+- **OAuth auth (signed in via Claude.ai)** — falls back to `claude -p` automatically; no key needed
 
 To override (e.g. in CI or without Claude Code):
 ```bash

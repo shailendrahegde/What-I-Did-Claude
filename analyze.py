@@ -133,12 +133,14 @@ def check_api_health() -> tuple:
     """
     Check if the Anthropic API is reachable and the key is valid.
     Returns a tuple of (status, message) where status is one of:
-      "ok"   — API reachable and key accepted
-      "auth" — API reachable but key rejected (401/403)
+      "ok"   — API reachable and key accepted (or claude CLI available as fallback)
+      "auth" — no API key and no claude CLI found
       "down" — API unreachable or unexpected error
     """
     api_key = _get_api_key()
     if not api_key:
+        if _claude_cli_available():
+            return ("ok", "No API key — will use `claude -p` via your Claude Code session.")
         return ("auth", "No API key found. Set ANTHROPIC_API_KEY or add primaryApiKey to ~/.claude/config.json")
 
     payload = json.dumps({
@@ -384,15 +386,21 @@ WORKED EXAMPLE — today's sessions should produce exactly 2 goals:
     reviewed a presentation unrelated to the analytics tool
     → SEPARATE GOAL: different subject, different deliverable, zero shared files
 
-GOOD GOAL TITLES (business outcome, verb-first):
+GOOD GOAL TITLES (business outcome, verb-first, based on the MOST SUBSTANTIAL work done):
   "Shipped a daily work digest tool from concept to working system"
   "Provided strategic rewrite recommendations for the presentation"
   "Diagnosed and resolved checkout regression in production"
 
-BAD GOAL TITLES (too granular or technical):
-  "Set up API authentication"   ← part of a larger goal
-  "Built HTML report generator" ← a task within a goal
-  "Refined report formatting"   ← a task within a goal
+BAD GOAL TITLES (too granular, based on first message instead of overall outcome):
+  "Set up API authentication"        ← part of a larger goal
+  "Built HTML report generator"      ← a task within a goal
+  "Refined report formatting"        ← a task within a goal
+  "Initialized git repository"       ← setup step, not the goal itself
+  "Prepared directory for checkin"   ← describes first action, not the outcome
+
+TITLE RULE: The goal title must describe the PRIMARY DELIVERABLE, not the first thing done.
+If a session starts with "prepare for github" but spends 80% of time building a report tool,
+the title should be about the report tool, not the git setup.
 
 ═══════════════════════════════════════════
 RULE 2 — LANGUAGE
@@ -423,32 +431,38 @@ GOOD framing:
   ✓ "Refined X to include Y" — extending intentionally, not correcting a mistake
 
 ═══════════════════════════════════════════
-RULE 3 — EFFORT ESTIMATES
+RULE 3 — EFFORT ESTIMATES (calibrated)
 ═══════════════════════════════════════════
 
-human_hours = what a skilled senior professional would need starting from scratch.
-- Use 0.25h increments (not 0.5h). Be precise.
-- Conservative (lean high, not low).
-- goal.human_hours must exactly equal the sum of its task hours.
+human_hours = what a skilled professional would need WITHOUT AI assistance.
+Estimate realistically — what would an expert actually bill for this work?
+Use this calibration scale — match the task to the closest anchor:
 
-ANCHOR SCALE:
-  0.25h — Trivial: single config change, typo fix, one-liner, quick lookup
-  0.50h — Simple: small edit, minor feature toggle, straightforward tweak
-  0.75h — Light: focused task with a few moving parts, clear solution path
-  1.00h — Moderate: typical feature with several components
-  1.50h — Moderate+: feature with non-trivial complexity or integration work
-  2.00h — Substantial: significant new capability or deep investigation
-  3.00h — Large: major feature or complex refactor across multiple files
-  4.00h — Major: large system component, multi-session effort
-  6.00h — Extensive: full-day project deliverable from scratch
+  0.25h    — Trivial: install a package, run a CLI command, toggle a config, copy files, push to git
+  0.5h     — Simple: minor code edit, format/style tweak, rename, small config change, answer a question
+  0.75h    — Light: write a helper function, fix a known bug, small template change
+  1.0-1.5h — Moderate: implement a small feature, debug an unknown issue, draft a short document
+  2-3h     — Substantial: design + implement a feature, write a detailed report, complex data analysis
+  4-8h     — Major: architect a new module, build a complete tool, comprehensive multi-step research
+  8-16h    — Large: build a full system from scratch, multi-day design-implement-test cycle, extensive refactor
 
-CALIBRATION SIGNALS (use these to sanity-check your estimates):
-  • If a session used fewer than 10 premium API requests total, ALL tasks in that
-    session combined should be ≤ 1.5h.
-  • If total tokens across all sessions < 50,000, the work was likely
-    straightforward — cap the entire day at 2h total.
-  • Total tool invocations today: {total_tool_calls}
-  • Total tokens today: {total_tokens['total']}
+Trivial/mechanical tasks (installing, deploying, git operations, answering questions) → 0.25-0.5h max.
+Complex tasks involving DESIGN, ANALYSIS, NOVEL CODING, or MULTI-STEP IMPLEMENTATION should scale up
+based on the quantitative signals below. An expert human writing 500 lines of production code needs
+4+ hours; researching and iterating through 100+ tool invocations is a full workday.
+
+USE THESE QUANTITATIVE SIGNALS to calibrate estimates:
+- Tool invocations: 1-10 = simple, 10-30 = moderate, 30-75 = substantial, 75-150 = major, 150+ = large
+- Code impact (lines added): <50 = minor, 50-150 = moderate, 150-300 = substantial, 300+ = major development
+- Expert human writes 100-150 lines of code per hour (including boilerplate, comments, config)
+- Total tool invocations today: {total_tool_calls}
+- Total tokens today: {total_tokens['total']}
+
+IMPORTANT RULES:
+- Mechanical execution (installing, deploying, running existing code, copying files) → 0.25-0.5h max
+- If total tool invocations < 10, ALL tasks combined should be ≤ 1h total
+- Each number must be nearest 0.25h (not just 0.5h increments)
+- goal.human_hours must exactly equal the sum of its task hours
 
 ═══════════════════════════════════════════
 OUTPUT SCHEMA

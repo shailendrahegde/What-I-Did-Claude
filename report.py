@@ -533,17 +533,30 @@ def _daily_activity_detail(sessions: list, buckets=None, bucket_labels=None) -> 
 # "How I Collaborated" section
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _collaboration_intent(sessions: list, goals: list) -> str:
+def _collaboration_intent(sessions: list, goals: list, project_label_map: dict = None) -> str:
     """Conic-gradient donut chart with intent legend + per-project bars."""
     from harvest import aggregate_intents, _INTENT_COLORS, _INTENT_ICONS
 
+    if project_label_map is None:
+        project_label_map = {}
+
     data = aggregate_intents(sessions)
     counts   = data.get("counts", {})
-    by_proj  = data.get("by_project", {})
+    by_proj_raw  = data.get("by_project", {})
     grand_total = data.get("total", 0) or 1
 
     if not counts:
         return ""
+
+    # Remap raw project names to consistent goal labels when possible.
+    by_proj = {}
+    for raw_name, pcounts in by_proj_raw.items():
+        display = project_label_map.get(raw_name) or raw_name
+        if display in by_proj:
+            for cat, n in pcounts.items():
+                by_proj[display][cat] = by_proj[display].get(cat, 0) + n
+        else:
+            by_proj[display] = dict(pcounts)
 
     # Sort descending
     sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
@@ -597,6 +610,7 @@ def _collaboration_intent(sessions: list, goals: list) -> str:
                 f'<div title="{cat}: {n}" style="background:{col};width:{w:.0f}%;'
                 f'height:12px;display:inline-block"></div>'
             )
+        # Use display label if available, otherwise fall back to short folder name
         short_proj = proj.replace("\\", "/").split("/")[-1] if proj else "unknown"
         proj_rows += f"""
           <tr>
@@ -1022,33 +1036,43 @@ def _resolve_metrics(project: str, session_metrics: dict, goal_date: str = "") -
 # ── Deterministic effort formula ─────────────────────────────────────────────
 
 def _tier_tools(n: int) -> float:
-    """Tool invocations → hour multiplier."""
+    """Tool invocations → expert human hours.
+    Each action (read file, edit, run command, search) averages 2-3 min for
+    a human. Diminishing returns at scale as many become quick reads."""
     if n <= 0:   return 0.0
-    if n <= 5:   return 0.25
-    if n <= 15:  return 0.5
-    if n <= 50:  return 0.75
-    if n <= 150: return 1.5
-    if n <= 400: return 3.0
-    return 5.0
+    if n <= 10:  return 0.5       # exploration / setup
+    if n <= 30:  return 1.5       # focused change (~3 min each)
+    if n <= 75:  return 3.0       # multi-file work (~2.4 min each)
+    if n <= 150: return 5.0       # substantial feature (~2 min each)
+    if n <= 300: return 8.0       # major implementation
+    if n <= 600: return 12.0      # full system build
+    return 16.0                   # very large project
 
-
-def _tier_tokens(n: int) -> float:
-    """Token usage → hour multiplier (replaces premium_requests for Claude)."""
-    if n <= 0:       return 0.0
-    if n <= 5000:    return 0.25
-    if n <= 20000:   return 0.5
-    if n <= 50000:   return 1.0
-    if n <= 150000:  return 2.0
-    return 3.0
 
 
 def _tier_lines(n: int) -> float:
-    """Lines added → additive hour contribution."""
+    """Lines added → additional coding effort on top of research/iteration.
+    Expert writes 100-150 LoC/hr. Partially overlaps with tool invocations,
+    so effective rate is ~200 LoC/hr as an additive component."""
     if n <= 0:   return 0.0
-    if n <= 25:  return 0.1
-    if n <= 100: return 0.25
-    if n <= 300: return 0.5
-    return 1.0
+    if n <= 50:  return 0.25      # config tweak
+    if n <= 150: return 0.75      # small feature
+    if n <= 300: return 1.5       # moderate module
+    if n <= 500: return 2.5       # major implementation
+    if n <= 800: return 4.0       # large feature
+    return round(n / 200, 1)      # continuous above 800
+
+
+def _tier_tokens(n: int) -> float:
+    """Token usage → indicative hours. Shown in evidence table for context only —
+    NOT used in the formula base because Claude tokens are inflated by cache reads."""
+    if n <= 0:          return 0.0
+    if n <= 50_000:     return 0.25
+    if n <= 200_000:    return 0.5
+    if n <= 1_000_000:  return 1.0
+    if n <= 5_000_000:  return 1.5
+    if n <= 20_000_000: return 2.0
+    return 2.5
 
 
 def _tier_active(m: float) -> float:
@@ -1057,8 +1081,10 @@ def _tier_active(m: float) -> float:
 
 
 def compute_formula_estimate(metrics: dict) -> dict:
-    """Deterministic effort estimate: max(tools, tokens, active) + lines.
+    """Deterministic effort estimate: max(tools, active) + lines.
 
+    Tokens are computed for display only — not included in the base because
+    Claude tokens are inflated by cache reads and context reuse.
     Returns dict with per-signal multipliers and final estimate.
     """
     tool_h   = _tier_tools(metrics.get("tool_invocations", 0))
@@ -1066,16 +1092,16 @@ def compute_formula_estimate(metrics: dict) -> dict:
     active_h = _tier_active(metrics.get("active_minutes", 0))
     lines_h  = _tier_lines(metrics.get("lines_added", 0))
 
-    base  = max(tool_h, tok_h, active_h)
-    total = max(base + lines_h, 0.25)   # Floor at 0.25h
+    base  = max(tool_h, active_h)        # tokens excluded from base
+    total = max(base + lines_h, 0.25)    # Floor at 0.25h
 
     return {
         "tool_h":   tool_h,
-        "tok_h":    tok_h,
+        "tok_h":    tok_h,               # display only
         "active_h": active_h,
         "lines_h":  lines_h,
         "base":     base,
-        "total":    round(total * 4) / 4,  # Nearest 0.25h
+        "total":    round(total * 4) / 4,
     }
 
 
@@ -1092,15 +1118,16 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
     tools = metrics.get("tool_invocations", 0)
     if tools:
         parts.append(f"<strong>{tools}</strong> tools &rarr; {_fmt_h(fe['tool_h'])}")
-    tok = metrics.get("tokens", 0)
-    if tok:
-        parts.append(f"<strong>{tok:,}</strong> tokens &rarr; {_fmt_h(fe['tok_h'])}")
-    la = metrics.get("lines_added", 0)
-    if la:
-        parts.append(f"<strong>+{la}</strong> lines &rarr; {_fmt_h(fe['lines_h'])}")
     active = metrics.get("active_minutes", 0)
     if active:
         parts.append(f"<strong>{active:.0f}m</strong> active &rarr; {_fmt_h(fe['active_h'])}")
+    la = metrics.get("lines_added", 0)
+    if la:
+        parts.append(f"<strong>+{la}</strong> lines &rarr; {_fmt_h(fe['lines_h'])}")
+    tok = metrics.get("tokens", 0)
+    if tok:
+        muted = C["muted"]
+        parts.append(f'<span style="color:{muted}">{tok:,} tokens (display only)</span>')
 
     if not parts:
         return ""
@@ -1125,7 +1152,7 @@ def _evidence_strip(goal: dict, session_metrics: dict) -> str:
               </div>
               <div id="{fid}" style="display:none;margin-top:4px;font-size:10px;color:{C['muted']}">
                 <code style="font-size:9px;background:{C['bg']};padding:1px 5px;border-radius:3px;
-                             color:{C['text']}">max({_fmt_h(fe['tool_h'])}, {_fmt_h(fe['tok_h'])}, {_fmt_h(fe['active_h'])}) + {_fmt_h(fe['lines_h'])}</code>
+                             color:{C['text']}">max({_fmt_h(fe['tool_h'])}, {_fmt_h(fe['active_h'])}) + {_fmt_h(fe['lines_h'])}</code>
                 = <strong style="color:{C['accent']}">{formula_h}</strong> deterministic
               </div>
             </div>"""
@@ -1176,53 +1203,40 @@ def _signal_guide() -> str:
     tools = _signal_tier_table(
         "Tool Invocations", "&#128295;",
         "Each discrete action Claude performs: read a file, edit code, run a command, "
-        "search, create a file. Higher counts indicate more complex, multi-step work.",
+        "search, create a file. Each averages 2–3 min for a human; diminishing returns at scale.",
         [
-            ("1–5",    "0.25h", "Quick task &mdash; open a file, make one edit, done. "
+            ("1–10",   "0.5h",  "Exploration / setup &mdash; open files, make one edit, run a check. "
                                 "<em>\"Fix this typo in config.yaml\"</em>"),
-            ("5–15",   "0.5h",  "Small focused change &mdash; read a few files, edit a function, run tests. "
+            ("10–30",  "1.5h",  "Focused change &mdash; read files, edit a function, iterate. "
                                 "<em>\"Add error handling to the upload endpoint\"</em>"),
-            ("15–50",  "0.75h", "Moderate multi-file work &mdash; touch 3–4 files, debug, iterate. "
+            ("30–75",  "3h",    "Multi-file work &mdash; touch 4–6 files, debug, refactor. "
                                 "<em>\"Refactor the auth module to use JWT\"</em>"),
-            ("50–150", "1.5h",  "Substantial feature &mdash; design + implement across a module with tests. "
+            ("75–150", "5h",    "Substantial feature &mdash; design + implement across a module. "
                                 "<em>\"Build the report generation pipeline\"</em>"),
-            ("150–400","3h",    "Major implementation &mdash; full tool or feature from scratch with iteration. "
+            ("150–300","8h",    "Major implementation &mdash; full tool or feature from scratch. "
                                 "<em>\"Ship an executive deck builder from concept to working system\"</em>"),
-            ("400+",   "5h",    "System overhaul &mdash; extensive multi-session redesign across many files. "
-                                "<em>\"Redesign the entire report layout with branding\"</em>"),
-        ]
-    )
-    tokens = _signal_tier_table(
-        "Token Usage", "&#9889;",
-        "Total tokens consumed (input + output + cache). Reflects the scale of AI reasoning "
-        "and context &mdash; more tokens means more back-and-forth depth and complexity.",
-        [
-            ("0",           "0h",    "No tokens &mdash; session data only, no AI calls"),
-            ("1–5k",        "0.25h", "Quick consultation &mdash; ask one question, get answer, done. "
-                                     "<em>\"What does this error mean?\"</em>"),
-            ("5k–20k",      "0.5h",  "Moderate back-and-forth &mdash; debug a problem, explore options. "
-                                     "<em>\"Why is this test failing? Try a different approach\"</em>"),
-            ("20k–50k",     "1h",    "Extended collaboration &mdash; iterative feature build with refinement. "
-                                     "<em>\"Build this component, now adjust the styling, now add tests\"</em>"),
-            ("50k–150k",    "2h",    "Deep work session &mdash; complex design + implementation + review. "
-                                     "<em>\"Architect the data pipeline and implement each stage\"</em>"),
-            ("150k+",       "3h",    "Marathon partnership &mdash; sustained, intensive multi-hour collaboration. "
-                                     "<em>\"Full system design through to delivery with extensive context\"</em>"),
+            ("300–600","12h",   "Full system build &mdash; multi-day implementation across many files. "
+                                "<em>\"Redesign the entire report layout with data pipeline\"</em>"),
+            ("600+",   "16h",   "Very large project &mdash; extensive multi-session system overhaul. "
+                                "<em>\"Architect and ship a complete analytics platform\"</em>"),
         ]
     )
     lines = _signal_tier_table(
         "Lines of Code", "&#128196;",
-        "Net code added to the project. Indicates the volume of deliverable output &mdash; "
-        "more lines generally means more development and review work for a human.",
+        "Net lines added to the project. Expert writes 100–150 LoC/hr; used as an additive "
+        "component on top of the base signal (tools/active).",
         [
-            ("0",      "0h",    "Research or analysis only &mdash; investigation, planning, no code written"),
-            ("1–25",   "0.1h",  "Config tweak or small fix &mdash; change a setting, fix a one-liner"),
-            ("25–100", "0.25h", "Small feature &mdash; a new function, helper, or template. "
-                                "<em>\"Add a utility function with error handling\"</em>"),
-            ("100–300","0.5h",  "Moderate development &mdash; a new module or significant feature. "
-                                "<em>\"Build the session harvester with event parsing\"</em>"),
-            ("300+",   "1h",    "Substantial build &mdash; major feature, new tool, or extensive refactor. "
-                                "<em>\"Ship 400+ lines of report generation code\"</em>"),
+            ("1–50",    "0.25h", "Config tweak &mdash; a setting, a one-liner, a small fix"),
+            ("50–150",  "0.75h", "Small feature &mdash; a new function, helper, or template. "
+                                 "<em>\"Add a utility function with error handling\"</em>"),
+            ("150–300", "1.5h",  "Moderate module &mdash; a new component or significant feature. "
+                                 "<em>\"Build the session harvester with event parsing\"</em>"),
+            ("300–500", "2.5h",  "Major implementation &mdash; substantial new capability. "
+                                 "<em>\"Implement the full report generation pipeline\"</em>"),
+            ("500–800", "4h",    "Large feature &mdash; a complete subsystem or tool. "
+                                 "<em>\"Ship 700+ lines of dashboard conversion code\"</em>"),
+            ("800+",    "n/200h","Continuous scale &mdash; e.g. 1,000 lines = 5h, 2,000 lines = 10h. "
+                                 "<em>\"Full system build with extensive scaffolding\"</em>"),
         ]
     )
     active = _signal_tier_table(
@@ -1254,7 +1268,6 @@ def _signal_guide() -> str:
               Range column &rarr; the Multiplier shows the hour contribution from that signal alone.
             </div>
             {tools}
-            {tokens}
             {lines}
             {active}
           </div>
@@ -1287,7 +1300,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
         ai_h       = _fmt_h(g.get("human_hours", 0))
         formula_h  = _fmt_h(fe["total"])
 
-        title = g.get("title", "")
+        title = g.get("label") or g.get("title", "")
         if len(title) > 40:
             title = title[:37] + "..."
 
@@ -1303,24 +1316,24 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
 
         rows += f"""
         <tr style="background:{bg}">
-          <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:22%"
+          <td style="padding:6px 10px;border-bottom:1px solid {C['border']};vertical-align:top;width:28%"
               rowspan="2">
             <div style="font-size:11px;font-weight:600;color:{C['text']};line-height:1.3">{title}</div>
           </td>
           <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{tools}</td>
+                     font-weight:600;width:12%">{tools}</td>
+          <td style="padding:4px 6px;font-size:11px;color:{C['muted']};text-align:center;
+                     width:14%">{tok_str}</td>
           <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{tok_str}</td>
+                     font-weight:600;width:12%">{active_str}</td>
           <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">{active_str}</td>
-          <td style="padding:4px 6px;font-size:11px;color:{C['text']};text-align:center;
-                     font-weight:600;width:13%">+{la}</td>
-          <td class="formula-col" style="padding:4px 6px;text-align:center;width:13%;
+                     font-weight:600;width:12%">+{la}</td>
+          <td class="formula-col" style="padding:4px 6px;text-align:center;width:10%;
                      vertical-align:middle;display:none" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['accent']}">{formula_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">formula</div>
           </td>
-          <td style="padding:4px 6px;text-align:center;width:13%;vertical-align:middle" rowspan="2">
+          <td style="padding:4px 6px;text-align:center;width:10%;vertical-align:middle" rowspan="2">
             <div style="font-size:14px;font-weight:700;color:{C['green']}">{ai_h}</div>
             <div style="font-size:8px;color:{C['muted']};text-transform:uppercase;margin-top:1px">AI est.</div>
           </td>
@@ -1329,7 +1342,7 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["tool_h"])}</td>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
-            {_hl(fe["tok_h"])}</td>
+            <span style="color:{C['muted']};font-size:10px">{_fmt_h(fe["tok_h"]) if fe["tok_h"] else "&mdash;"}</span></td>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
             {_hl(fe["active_h"])}</td>
           <td style="padding:2px 6px 6px;text-align:center;border-bottom:1px solid {C['border']}">
@@ -1370,8 +1383,9 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <strong style="color:{C['text']}">How to read this table:</strong>
           Each row shows a project's raw session data (top) and the hour multiplier each signal
           maps to (bottom). The <strong style="color:{C['accent']}">highest multiplier</strong>
-          among tools, tokens, and active time becomes the base estimate.
-          Lines of code are added on top.
+          between tools and active time becomes the base estimate. Lines of code are added on top.
+          <span style="color:{C['muted']}">&#8224; Tokens shown for context only — not used in formula
+          (inflated by context cache reuse).</span>
         </div>
         <div style="font-size:10px;color:{C['muted']};margin-bottom:10px;padding:8px 12px;
                     background:{C['subtle']};border-radius:6px;border:1px solid {C['border']}">
@@ -1388,25 +1402,25 @@ def _estimation_waterfall_inner(goals: list, analysis: dict) -> str:
           <tr style="background:{C['accent_lt']}">
             <th style="padding:6px 10px;text-align:left;font-size:9px;font-weight:700;
                        color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:22%">Project</th>
+                       border-bottom:1px solid {C['border']};width:28%">Project</th>
             <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                        color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%">Tools</th>
+                       border-bottom:1px solid {C['border']};width:12%">Tools</th>
+            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
+                       color:{C['muted']};text-transform:uppercase;letter-spacing:0.5px;
+                       border-bottom:1px solid {C['border']};width:14%">Tokens &#8224;</th>
             <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                        color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%">Tokens</th>
+                       border-bottom:1px solid {C['border']};width:12%">Active</th>
             <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                        color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%">Active</th>
-            <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
-                       color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%">Lines</th>
+                       border-bottom:1px solid {C['border']};width:12%">Lines</th>
             <th class="formula-col" style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                        color:{C['accent']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%;display:none">Formula</th>
+                       border-bottom:1px solid {C['border']};width:10%;display:none">Formula</th>
             <th style="padding:6px 6px;text-align:center;font-size:9px;font-weight:700;
                        color:{C['green']};text-transform:uppercase;letter-spacing:0.5px;
-                       border-bottom:1px solid {C['border']};width:13%">AI Est.</th>
+                       border-bottom:1px solid {C['border']};width:10%">AI Est.</th>
           </tr>
           {rows}
         </table>
@@ -1442,6 +1456,28 @@ def generate_html(target_date: str, analysis: dict, sessions: list) -> str:
         session_lookup[s["project"]] = s
         last = s["project"].replace("\\", "/").split("/")[-1]
         session_lookup.setdefault(last, s)
+
+    # Build mapping from raw session project names → goal display labels
+    # so session-based sections (collaboration) use consistent names.
+    _norm = lambda s: s.lower().replace("-", " ").replace("_", " ").strip()
+    project_label_map: dict = {}
+    for g in goals:
+        raw = g.get("project", "")
+        label = g.get("label") or g.get("title", "")
+        if raw and label:
+            project_label_map[raw] = label
+            last = raw.replace("\\", "/").split("/")[-1]
+            project_label_map.setdefault(last, label)
+    # Fuzzy-match unmapped session projects by normalized name
+    goal_norm_map = {_norm(g.get("project", "")): g for g in goals if g.get("project")}
+    for s in sessions:
+        sp = s.get("project", "")
+        if sp and sp not in project_label_map:
+            matched = goal_norm_map.get(_norm(sp))
+            if matched:
+                lbl = matched.get("label") or matched.get("title", "")
+                if lbl:
+                    project_label_map[sp] = lbl
 
     js = """
 <script>
@@ -1582,7 +1618,7 @@ window.onload = function() {
 
   {_what_got_produced(goals, sessions)}
 
-  {_collaboration_intent(sessions, goals)}
+  {_collaboration_intent(sessions, goals, project_label_map)}
 
   {_work_pattern(sessions)}
 

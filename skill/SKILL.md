@@ -8,23 +8,25 @@ description: "Generate a daily analytics report of what Claude helped accomplish
 Run the following to generate and email today's activity report:
 
 ```bash
-python ~/claude/whatidid/whatidid.py --email shahegde@microsoft.com
+python ~/claude/whatidid/whatidid.py --email
 ```
 
 If the user asks for a specific date, use:
 ```bash
-python ~/claude/whatidid/whatidid.py --date YYYY-MM-DD --email shahegde@microsoft.com
+python ~/claude/whatidid/whatidid.py --date YYYY-MM-DD --email
 ```
 
-If the user just wants to view (no email):
+The email address is auto-detected from git config. To send to a specific address:
 ```bash
-python ~/claude/whatidid/whatidid.py --html
+python ~/claude/whatidid/whatidid.py --email user@example.com
 ```
 
 After running, tell the user:
 - How many sessions and projects were found
 - The headline and primary focus identified
 - The total human effort estimate vs elapsed time (leverage ratio)
-- That the email has been sent (or HTML saved)
+- That the email has been sent
+
+The report is always opened in the browser automatically.
 
 If there are no sessions for the date, explain that Claude Code session data is stored in ~/.claude/projects/ and suggest checking the date.

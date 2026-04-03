@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-DEFAULT_EMAIL = "shahegde@microsoft.com"
+DEFAULT_EMAIL = ""  # Auto-detected from git config (git config user.email)
 
 _LOOKBACK_RE = re.compile(r'^(\d+)[dD]$')
 
@@ -120,12 +120,20 @@ def _normalize_project(name: str) -> str:
     return name.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-")
 
 
-def _merge_related_goals(goals: list) -> list:
-    """Group goals from the same project across days."""
+def _merge_related_goals(goals: list, project_to_repo: dict = None) -> list:
+    """Group goals from the same project across days.
+
+    When project_to_repo is provided, goals whose projects resolve to the same
+    git repo slug are merged even if their directory names differ.
+    """
     groups = OrderedDict()
+    repo_map = project_to_repo or {}
     for g in goals:
         proj = g.get("project", "")
-        key = _normalize_project(proj) if proj else f"_unnamed_{id(g)}"
+        norm_dir = _normalize_project(proj) if proj else ""
+        # Prefer repo slug as grouping key so different dirs on the same repo merge
+        repo_key = repo_map.get(proj) or repo_map.get(norm_dir)
+        key = repo_key or norm_dir or f"_unnamed_{id(g)}"
         if key in groups:
             merged = groups[key]
             merged["tasks"].extend(g.get("tasks", []))
@@ -204,9 +212,22 @@ def _merge_analyses(day_analyses: list) -> dict:
 
     active_dates = sorted({d for d, _, _ in day_analyses})
 
+    # Build project→repo-slug mapping from session git metadata
+    project_to_repo: dict = {}
+    for s in all_sessions:
+        proj      = s.get("project", "")
+        proj_path = s.get("project_path", "")
+        repos     = s.get("git_repos", [])
+        if proj and repos:
+            slug = repos[0]  # use first (usually only) remote
+            project_to_repo[proj] = slug
+            project_to_repo[_normalize_project(proj)] = slug
+            if proj_path and proj_path != proj:
+                project_to_repo[proj_path] = slug
+
     # Merge goals across days for multi-day reports
     if len(active_dates) > 1:
-        all_goals = _merge_related_goals(all_goals)
+        all_goals = _merge_related_goals(all_goals, project_to_repo)
 
     # Headline / narrative
     if len(active_dates) == 1:
@@ -379,7 +400,7 @@ def main():
     print("  Checking AI analysis API... ", end="", flush=True)
     status, msg = check_api_health()
     if status == "ok":
-        print("[OK]")
+        print(f"[OK] {msg}" if "claude -p" in msg else "[OK]")
         api_ok = True
     elif status == "auth":
         print(f"[FAIL] {msg}")
@@ -436,11 +457,9 @@ def main():
         email_addr = args.email
 
     send_email_flag = bool(email_addr)
-    save_html = args.html or not send_email_flag
 
-    output_path = None
-    if save_html:
-        output_path = _save_and_open(html, report_label)
+    # Always save and open the report in the browser
+    output_path = _save_and_open(html, report_label)
 
     if send_email_flag:
         from email_send import send_email
@@ -449,9 +468,7 @@ def main():
         if send_email(email_addr, subject, html):
             print("   Sent.")
         else:
-            print("   Email failed. Saving HTML as fallback...")
-            if not output_path:
-                output_path = _save_and_open(html, report_label)
+            print("   Email failed.")
 
     print("\nDone.\n")
 
