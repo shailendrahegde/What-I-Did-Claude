@@ -27,7 +27,7 @@ _INTENT_CATEGORIES = {
     "Investigating": _re.compile(r"\b(examine|why does|why is|what.s going on|debug|diagnose|analyze what|look at this|can you examine|what.s wrong|trace|root cause|broken|fails|failing|error|identical.+different)\b", _re.I),
     "Designing":     _re.compile(r"\b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b", _re.I),
     "Researching":   _re.compile(r"\b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b", _re.I),
-    "Iterating":     _re.compile(r"\b(adjust|simplify|change the|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the)\b", _re.I),
+    "Iterating":     _re.compile(r"\b(adjust|simplify|change|update|modify|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the|instead of|rather than|make it|make the|make this|a bit|a little|slightly|smaller|larger|bigger|shorter|longer|cleaner|replace|rename|shorten|widen|a tad|less|more like|also add|also update|also change|also include|also remove|should be|it should|should have)\b", _re.I),
     "Shipping":      _re.compile(r"\b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b", _re.I),
     "Planning":      _re.compile(r"\b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b", _re.I),
     "Testing":       _re.compile(r"\b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b", _re.I),
@@ -698,6 +698,11 @@ def compute_active_time_quality(sessions: list) -> dict:
     """
     from datetime import datetime as _dt
 
+    _trivial_qual_rx = _re.compile(
+        r'^(yes|no|ok|okay|sure|thanks|thank you|perfect|great|good|looks good|'
+        r'go ahead|do it|please|correct|exactly|right|got it|nice|awesome|'
+        r'commit|push|open|lgtm|ship it|done|\d+)\s*[.!?]*$', _re.I)
+
     modes: dict = {name: 0.0 for name, _, _ in _QUALITY_MODES}
     modes["Needed hand-holding"] = 0.0
 
@@ -722,9 +727,9 @@ def compute_active_time_quality(sessions: list) -> dict:
             tool_errors     = bool(_QUALITY_TOOL_RX and _QUALITY_TOOL_RX.search(tools_text))
             needs_handholding = user_correcting or tool_errors
 
-            # Trivial turn detection
+            # Trivial turn: explicit short confirmations only (not short requests)
             first_line = text.split("\n")[0].strip()
-            is_trivial = len(first_line) < 20
+            is_trivial = bool(_trivial_qual_rx.match(first_line))
 
             user_turns.append({
                 "ts": ts, "intents": intents, "tools": len(tools),
