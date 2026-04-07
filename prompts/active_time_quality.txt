@@ -7,26 +7,30 @@
 # 2. MODE: based on intent classification of the message content
 
 [hand_holding_user_patterns]
-# User correcting or redirecting Claude (regex, case-insensitive)
-# NOTE: "didn't like", "not impressed", "instead" removed — these are preferences/direction
-# changes, not error corrections. They belong to Refinement partner (Iterating intent).
-\b(no|wrong|not what i|that.s not|didn.t work|try again|still broken|not right|i said|i meant|i asked|that.s incorrect|you missed|go back|undo|revert|abort|stop|don.t|shouldn.t|not what|why did you|the issue is|the problem is|that broke|you broke|can you fix|fix this|fix that|fix the|still not|i already told|read (my|the) (previous|last)|look at what i said)\b
+# User expressing dissatisfaction or correcting Claude (regex, case-insensitive)
+# "didn't like" and "not impressed" = quality feedback → hand-holding.
+# "instead" alone removed (too broad — "instead of X use Y" is direction-setting, not error).
+\b(no|wrong|not what i|that.s not|didn.t work|try again|still broken|not right|i said|i meant|i asked|that.s incorrect|you missed|go back|undo|revert|abort|stop|don.t|shouldn.t|not impressed|didn.t like|not what|why did you|the issue is|the problem is|that broke|you broke|can you fix|fix this|fix that|fix the|still not|i already told|read (my|the) (previous|last)|look at what i said)\b
 
 [hand_holding_tool_patterns]
 # Error signals in tool output (regex, case-insensitive)
 \b(error|fail|exception|traceback|broken|crash|UnicodeError|SyntaxError|KeyError|TypeError|ModuleNotFound|ImportError|rejected|denied|exited with exit code [1-9])\b
 
+[grunt_override_patterns]
+# These fire BEFORE intent-based mode matching — always Grunt work regardless of other signals.
+# Covers: documentation writes, readme updates, mass/bulk file operations.
+\b(readme|documentation|changelog|docstring|write docs|update docs|write the docs|update the readme|write the readme|mass update|bulk update|rename all|update all|across all files|every file|all the files|all occurrences|find and replace|search and replace)\b
+
 [modes]
 # mode_name | intent_match | description
-# First matching rule wins. Hand-holding is checked before these rules.
-# Refinement FIRST — Iterating intent wins over Building AND Designing.
-# "modify the spacing", "not impressed with the layout" = iterating on design → Refinement.
-# "redesign from scratch", "plan the architecture" = net-new design intent → Creative partner.
-Refinement partner  | Iterating               | Iterating, polishing, improving
-Creative partner    | Designing,Planning      | Design, strategy, architecture
+# Priority order: Hand-holding → Grunt override → Trivial → Intent-based (first match wins).
+# Refinement FIRST over Building and Designing — iterating on existing output wins.
+# Creative partner for net-new design/direction decisions ("instead of X", "redesign").
+Refinement partner  | Iterating               | Iterating, polishing, improving existing work
+Creative partner    | Designing,Planning      | Net-new design decisions, direction changes
 Research assistant  | Researching,Investigating,Navigating | Exploring options, investigating
-Builder             | Building                | Writing code, generating files
-Grunt work handled  | Shipping,Configuring    | Git ops, config, installs, routine
+Builder             | Building                | Writing code, generating new features
+Grunt work handled  | Shipping,Configuring    | Git ops, config, installs, docs, routine tasks
 
 [mode_colors]
 Creative partner    | #7b1fa2

@@ -25,9 +25,9 @@ import re as _re
 _INTENT_CATEGORIES = {
     "Building":      _re.compile(r"\b(create|add|generate|implement|write|make|build|produce|include|set up|initialize|scaffold|install|open it|rerun|run)\b", _re.I),
     "Investigating": _re.compile(r"\b(examine|why does|why is|what.s going on|debug|diagnose|analyze what|look at this|can you examine|what.s wrong|trace|root cause|broken|fails|failing|error|identical.+different)\b", _re.I),
-    "Designing":     _re.compile(r"\b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner)\b", _re.I),
+    "Designing":     _re.compile(r"\b(redesign|prominent|visual|layout|style|look like|look more|distinction|spacing|story|compelling|section|appearance|prototype|mockup|wireframe|branding|banner|instead of|rather than|pivot|rethink|different approach|go with|how about)\b", _re.I),
     "Researching":   _re.compile(r"\b(what.s the|how does|how do|are there|can i do|do they|what can|what would|how come|cost|limit|explain|compare|difference|option)\b", _re.I),
-    "Iterating":     _re.compile(r"\b(adjust|simplify|change|update|modify|not impressed|didn.t like|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the|instead of|rather than|make it|make the|make this|a bit|a little|slightly|smaller|larger|bigger|shorter|longer|cleaner|replace|rename|shorten|widen|a tad|less|more like|also add|also update|also change|also include|also remove|should be|it should|should have)\b", _re.I),
+    "Iterating":     _re.compile(r"\b(adjust|simplify|change|update|modify|better|improve|also like|refine|tweak|move this|swap|resize|reorder|reduce|remove the|make it|make the|make this|a bit|a little|slightly|smaller|larger|bigger|shorter|longer|cleaner|replace|rename|shorten|widen|a tad|less|more like|also add|also update|also change|also include|also remove|should be|it should|should have)\b", _re.I),
     "Shipping":      _re.compile(r"\b(commit|push|pr\b|pull request|merge|deploy|ship|tag|release|check.?in)\b", _re.I),
     "Planning":      _re.compile(r"\b(plan|propose|approach|strategy|stages|phases|priority|before that|options|go ahead|wait for)\b", _re.I),
     "Testing":       _re.compile(r"\b(test|verify|validate|check if|smoke|does it work|try it|confirm)\b", _re.I),
@@ -657,11 +657,12 @@ def _load_quality_config() -> tuple:
     path = Path(__file__).parent / "prompts" / "active_time_quality.txt"
     user_rx = None
     tool_rx = None
+    grunt_rx = None
     modes_order = []  # [(name, intents_set, desc)]
     colors = {}
     section = None
     if not path.exists():
-        return user_rx, tool_rx, modes_order, colors
+        return user_rx, tool_rx, grunt_rx, modes_order, colors
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -673,6 +674,8 @@ def _load_quality_config() -> tuple:
             user_rx = _re.compile(line, _re.I)
         elif section == "hand_holding_tool_patterns":
             tool_rx = _re.compile(line, _re.I)
+        elif section == "grunt_override_patterns":
+            grunt_rx = _re.compile(line, _re.I)
         elif section == "modes":
             parts = [p.strip() for p in line.split("|", 2)]
             if len(parts) == 3:
@@ -683,10 +686,10 @@ def _load_quality_config() -> tuple:
             parts = [p.strip() for p in line.split("|", 1)]
             if len(parts) == 2:
                 colors[parts[0]] = parts[1]
-    return user_rx, tool_rx, modes_order, colors
+    return user_rx, tool_rx, grunt_rx, modes_order, colors
 
 
-_QUALITY_USER_RX, _QUALITY_TOOL_RX, _QUALITY_MODES, _QUALITY_COLORS = _load_quality_config()
+_QUALITY_USER_RX, _QUALITY_TOOL_RX, _QUALITY_GRUNT_RX, _QUALITY_MODES, _QUALITY_COLORS = _load_quality_config()
 
 
 def compute_active_time_quality(sessions: list) -> dict:
@@ -727,13 +730,18 @@ def compute_active_time_quality(sessions: list) -> dict:
             tool_errors     = bool(_QUALITY_TOOL_RX and _QUALITY_TOOL_RX.search(tools_text))
             needs_handholding = user_correcting or tool_errors
 
+            # Grunt override: doc writes, readme updates, mass file ops — before intent matching
+            is_grunt_override = bool(_QUALITY_GRUNT_RX and _QUALITY_GRUNT_RX.search(text[:300]))
+
             # Trivial turn: explicit short confirmations only (not short requests)
             first_line = text.split("\n")[0].strip()
             is_trivial = bool(_trivial_qual_rx.match(first_line))
 
             user_turns.append({
                 "ts": ts, "intents": intents, "tools": len(tools),
-                "needs_handholding": needs_handholding, "is_trivial": is_trivial,
+                "needs_handholding": needs_handholding,
+                "is_grunt_override": is_grunt_override,
+                "is_trivial": is_trivial,
             })
 
         # Compute time per turn from timestamp gaps (capped at 5 min for idle)
@@ -751,7 +759,7 @@ def compute_active_time_quality(sessions: list) -> dict:
             if t["needs_handholding"]:
                 modes["Needed hand-holding"] += mins
                 continue
-            if t["is_trivial"]:
+            if t.get("is_grunt_override") or t["is_trivial"]:
                 modes.setdefault("Grunt work handled", 0.0)
                 modes["Grunt work handled"] += mins
                 continue
