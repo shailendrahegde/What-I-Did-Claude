@@ -47,6 +47,45 @@ PROFESSIONAL_ROLES = (
 )
 
 
+def _load_taxonomy() -> tuple:
+    """Load domain and tech skill lists from prompts/skills_taxonomy.txt if it exists."""
+    path = Path(__file__).parent / "prompts" / "skills_taxonomy.txt"
+    if not path.exists():
+        return DOMAIN_SKILLS, TECH_SKILLS
+    domain, tech = [], []
+    section = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line == "[domain_skills]":
+            section = "domain"
+        elif line == "[tech_skills]":
+            section = "tech"
+        elif section == "domain":
+            domain.append(line)
+        elif section == "tech":
+            tech.append(line)
+    return tuple(domain) or DOMAIN_SKILLS, tuple(tech) or TECH_SKILLS
+
+
+def _build_analysis_prompt(transcript: str, domain_list: str, tech_list: str,
+                            total_tool_calls: int = 0, total_tokens_total: int = 0) -> str:
+    """Build the analysis prompt — loads template from prompts/analysis.txt if available."""
+    prompt_path = Path(__file__).parent / "prompts" / "analysis.txt"
+    if prompt_path.exists():
+        template = prompt_path.read_text(encoding="utf-8")
+        return template.format(
+            transcript=transcript,
+            domain_list=domain_list,
+            tech_list=tech_list,
+            total_tool_calls=total_tool_calls,
+            total_tokens_total=total_tokens_total,
+        )
+    # Fallback: use the inline prompt (existing behavior)
+    return None  # caller handles None by using the inline prompt
+
+
 # ── API helpers ───────────────────────────────────────────────────────────────
 
 def _get_api_key() -> str:
@@ -178,11 +217,47 @@ def check_api_health() -> tuple:
 # ── Transcript builder ────────────────────────────────────────────────────────
 
 def _build_transcript(sessions: list) -> str:
+    import re as _re2
     lines = []
     for s in sessions:
         lines.append(f"\n=== PROJECT: {s['project']} | SESSION: {s['session_id'][:8]} ===")
         if s.get("session_start") and s.get("session_end"):
             lines.append(f"Time: {s['session_start'][11:19]} → {s['session_end'][11:19]} UTC")
+
+        # Enriched quantitative signals block
+        user_msgs = [m for m in s["messages"] if m["role"] == "user"]
+        n_tools = sum(len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user")
+        reads, edits, runs = 0, 0, 0
+        edit_targets: dict = {}
+        for m in s["messages"]:
+            for t in m.get("tools_after", []):
+                tl = t.lower()
+                if any(w in tl for w in ("read", "grep", "glob", "search", "find", "explore")):
+                    reads += 1
+                elif any(w in tl for w in ("edit", "write", "bash: write")):
+                    edits += 1
+                    fname_match = _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    if fname_match:
+                        fn = fname_match.group(1)
+                        edit_targets[fn] = edit_targets.get(fn, 0) + 1
+                elif any(w in tl for w in ("bash", "run", "test", "build", "install",
+                                           "exec", "command", "pip", "npm", "git")):
+                    runs += 1
+        from harvest import compute_active_minutes, compute_elapsed_minutes as _cem
+        active_min = compute_active_minutes(s["messages"])
+        wall_min = _cem(s.get("session_start", ""), s.get("session_end", ""))
+        iter_depth = round(sum(edit_targets.values()) / max(len(edit_targets), 1), 1) if edit_targets else 0.0
+        la = s.get("lines_added", 0)
+
+        sig = [f"SIGNALS: {n_tools} tools ({reads} reads, {edits} edits, {runs} runs)"]
+        sig.append(f"  Conversation turns: {len(user_msgs)}")
+        if la:
+            sig.append(f"  Lines added: +{la}")
+        sig.append(f"  Active time: {active_min:.0f}m of {wall_min:.0f}m wall clock")
+        if iter_depth > 1:
+            sig.append(f"  Iteration depth: {iter_depth} edits/file avg")
+        lines.append("\n".join(sig))
+
         for msg in s["messages"]:
             if msg["role"] != "user":
                 continue
@@ -233,7 +308,14 @@ def _build_session_metrics(sessions: list) -> dict:
     """
     Build a dict keyed by project name (and also by basename) with per-project
     aggregated metrics across all sessions for that project.
+    Includes enriched signals: reads/edits/runs breakdown, conversation_turns,
+    substantive_turns, files_touched_count, iteration_depth.
     """
+    import re as _re2
+    _trivial_rx = _re2.compile(
+        r'^(yes|no|ok|okay|sure|thanks|thank you|perfect|great|good|looks good|'
+        r'go ahead|do it|please|correct|exactly|right|got it|nice|awesome|'
+        r'commit|push|open|lgtm|ship it|done|\d)\s*[.!?]*$', _re2.I)
     aggregated: dict = {}
 
     for s in sessions:
@@ -241,7 +323,6 @@ def _build_session_metrics(sessions: list) -> dict:
         basename = proj.split("/")[-1].split("\\")[-1]
 
         tok = s.get("tokens", {})
-        tools_count = sum(len(m.get("tools_after", [])) for m in s.get("messages", []))
         lines_added = s.get("lines_added", 0)
         active_min  = _compute_active_minutes(s)
         wall_min    = compute_elapsed_minutes(
@@ -249,25 +330,86 @@ def _build_session_metrics(sessions: list) -> dict:
             s.get("session_end", ""),
         )
 
+        # Count tool invocations and classify by type
+        reads, edits, runs = 0, 0, 0
+        edit_targets: dict = {}
+        for m in s.get("messages", []):
+            for t in m.get("tools_after", []):
+                tl = t.lower()
+                if any(w in tl for w in ("read", "grep", "glob", "search", "find", "explore")):
+                    reads += 1
+                elif any(w in tl for w in ("edit", "write", "bash: write")):
+                    edits += 1
+                    fname_match = _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    if fname_match:
+                        fn = fname_match.group(1)
+                        edit_targets[fn] = edit_targets.get(fn, 0) + 1
+                elif any(w in tl for w in ("bash", "run", "test", "build", "install",
+                                           "exec", "command", "pip", "npm", "git")):
+                    runs += 1
+        tools_count = sum(len(m.get("tools_after", [])) for m in s.get("messages", []))
+
+        # Conversation turns
+        user_msgs = [m for m in s.get("messages", []) if m.get("role") == "user"]
+        conv_turns = len(user_msgs)
+        substantive = sum(
+            1 for um in user_msgs
+            if len(um["text"].strip().split("\n")[0].strip()) >= 20
+            and not _trivial_rx.match(um["text"].strip().split("\n")[0].strip())
+        )
+
+        # Files touched
+        files_touched_count = len(edit_targets)
+
+        # Iteration depth
+        total_edits = sum(edit_targets.values())
+        iter_depth = round(total_edits / max(len(edit_targets), 1), 1) if edit_targets else 0.0
+
         entry = {
-            "tokens":           tok.get("input", 0) + tok.get("output", 0),
-            "tool_invocations": tools_count,
-            "lines_added":      lines_added,
-            "active_minutes":   active_min,
-            "wall_clock_minutes": wall_min,
-            "sessions":         1,
+            "tokens":              tok.get("input", 0) + tok.get("output", 0),
+            "tool_invocations":    tools_count,
+            "lines_added":         lines_added,
+            "active_minutes":      active_min,
+            "wall_clock_minutes":  wall_min,
+            "sessions":            1,
+            "reads":               reads,
+            "edits":               edits,
+            "runs":                runs,
+            "conversation_turns":  conv_turns,
+            "substantive_turns":   substantive,
+            "files_touched_count": files_touched_count,
+            "iteration_depth":     iter_depth,
+            "_total_file_edits":   total_edits,
+            "_total_files_edited": len(edit_targets),
         }
 
         for key in (proj, basename):
             if key not in aggregated:
                 aggregated[key] = dict(entry)
             else:
-                aggregated[key]["tokens"]             += entry["tokens"]
-                aggregated[key]["tool_invocations"]   += entry["tool_invocations"]
-                aggregated[key]["lines_added"]        += entry["lines_added"]
-                aggregated[key]["active_minutes"]     += entry["active_minutes"]
-                aggregated[key]["wall_clock_minutes"] += entry["wall_clock_minutes"]
-                aggregated[key]["sessions"]           += 1
+                e = aggregated[key]
+                e["tokens"]             += entry["tokens"]
+                e["tool_invocations"]   += entry["tool_invocations"]
+                e["lines_added"]        += entry["lines_added"]
+                e["active_minutes"]     += entry["active_minutes"]
+                e["wall_clock_minutes"] += entry["wall_clock_minutes"]
+                e["sessions"]           += 1
+                e["reads"]              += entry["reads"]
+                e["edits"]              += entry["edits"]
+                e["runs"]               += entry["runs"]
+                e["conversation_turns"] += entry["conversation_turns"]
+                e["substantive_turns"]  += entry["substantive_turns"]
+                # files_touched and iter_depth: weighted average
+                prev_e = e.get("_total_file_edits", 0)
+                prev_f = e.get("_total_files_edited", 0)
+                curr_e = entry["_total_file_edits"]
+                curr_f = entry["_total_files_edited"]
+                total_f = prev_f + curr_f
+                total_e_sum = prev_e + curr_e
+                e["files_touched_count"] = total_f
+                e["iteration_depth"] = round(total_e_sum / max(total_f, 1), 1)
+                e["_total_file_edits"] = total_e_sum
+                e["_total_files_edited"] = total_f
 
     return aggregated
 
@@ -335,12 +477,22 @@ def analyze_day(
     )
 
     transcript = _build_transcript(sessions)
-    domain_list = "\n".join(f"  - {s}" for s in DOMAIN_SKILLS)
-    tech_list   = "\n".join(f"  - {s}" for s in TECH_SKILLS)
+    _tax_domain, _tax_tech = _load_taxonomy()
+    domain_list = "\n".join(f"  - {s}" for s in _tax_domain)
+    tech_list   = "\n".join(f"  - {s}" for s in _tax_tech)
     task_type_list = " | ".join(TASK_TYPES)
     role_list      = ", ".join(PROFESSIONAL_ROLES)
 
-    prompt = f"""Analyze this day of Claude-assisted work and produce a JSON digest.
+    # Try loading prompt from prompts/analysis.txt first
+    _ext_prompt = _build_analysis_prompt(
+        transcript=transcript,
+        domain_list=domain_list,
+        tech_list=tech_list,
+        total_tool_calls=total_tool_calls,
+        total_tokens_total=total_tokens["total"],
+    )
+
+    prompt = _ext_prompt if _ext_prompt is not None else f"""Analyze this day of Claude-assisted work and produce a JSON digest.
 
 SESSION TRANSCRIPT:
 {transcript}

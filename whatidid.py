@@ -210,6 +210,27 @@ def _merge_analyses(day_analyses: list) -> dict:
                     existing["lines_added"]      = existing.get("lines_added", 0)      + sm.get("lines_added", 0)
                     existing["active_minutes"]   = existing.get("active_minutes", 0)   + sm.get("active_minutes", 0)
 
+    # Compute per-day formula totals for multi-day goals
+    # (avoids inflating multipliers on aggregated metrics)
+    from report import compute_formula_estimate as _cfe
+    _proj_day_totals: dict = {}  # key: proj_normalized → total formula hours
+    for target_date, analysis, sessions in day_analyses:
+        sm = analysis.get("session_metrics", {})
+        for proj_key, pm in sm.items():
+            if not isinstance(pm, dict) or "|" in proj_key:
+                continue
+            norm = _normalize_project(proj_key)
+            fe = _cfe(pm)
+            _proj_day_totals[norm] = _proj_day_totals.get(norm, 0) + fe["total"]
+    # Stamp _per_day_formula_total into merged_session_metrics
+    for key, sm in merged_session_metrics.items():
+        if not isinstance(sm, dict):
+            continue
+        proj_part = key.split("|", 1)[-1] if "|" in key else key
+        norm = _normalize_project(proj_part)
+        if norm in _proj_day_totals:
+            sm["_per_day_formula_total"] = round(_proj_day_totals[norm] * 4) / 4
+
     active_dates = sorted({d for d, _, _ in day_analyses})
 
     # Build project→repo-slug mapping from session git metadata
@@ -350,6 +371,13 @@ def _detect_email() -> str:
 def main():
     argv = _preprocess_argv(sys.argv[1:])
 
+    # Force UTF-8 stdout/stderr to prevent UnicodeEncodeError on Windows cp1252
+    import io, sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(
         description="Generate a digest of what Claude helped you accomplish."
     )
@@ -443,7 +471,8 @@ def main():
 
     # ── Generate HTML ──────────────────────────────────────────────────────────
     from report import generate_html
-    html = generate_html(report_label, analysis, all_sessions)
+    html_browser = generate_html(report_label, analysis, all_sessions, max_width=960)
+    html_email   = generate_html(report_label, analysis, all_sessions, max_width=700)
 
     # ── Email handling ─────────────────────────────────────────────────────────
     # args.email is True  → --email given with no address (const=True)
@@ -459,13 +488,13 @@ def main():
     send_email_flag = bool(email_addr)
 
     # Always save and open the report in the browser
-    output_path = _save_and_open(html, report_label)
+    output_path = _save_and_open(html_browser, report_label)
 
     if send_email_flag:
         from email_send import send_email
         subject = f"What I Did | {report_label.replace('_', ' ')}"
         print(f"\nSending to {email_addr}...")
-        if send_email(email_addr, subject, html):
+        if send_email(email_addr, subject, html_email):
             print("   Sent.")
         else:
             print("   Email failed.")
