@@ -267,6 +267,7 @@ def get_sessions_for_date(target_date: str) -> list:
         git_ops        = []
         git_repos      = set()
         lines_added_count = 0
+        _file_last_write: dict = {}   # track last Write size per path → net-only counting
         pull_requests  = []
         cwd_seen  = None   # actual working directory from entry metadata
         entrypoint = None  # 'cli', 'vscode', etc.
@@ -367,15 +368,7 @@ def get_sessions_for_date(target_date: str) -> list:
                                             summary = f"DocFound: {dn}"
                                             if summary not in last["tools_after"]:
                                                 last["tools_after"].append(summary)
-                                # Extract lines added from git diff/commit stats
-                                for lm in _re.finditer(
-                                    r'(\d+) insertion',
-                                    result_content or ""
-                                ):
-                                    try:
-                                        lines_added_count += int(lm.group(1))
-                                    except (ValueError, AttributeError):
-                                        pass
+                                pass  # git diff insertion counting removed; Edit/Write net counting is authoritative
                 if ts:
                     if not session_start:
                         session_start = ts
@@ -402,14 +395,21 @@ def get_sessions_for_date(target_date: str) -> list:
                             # Attach to the most recent user instruction
                             if messages and messages[-1]["role"] == "user":
                                 messages[-1]["tools_after"].append(tool_summary)
-                            # Count lines written via Edit/Write tool calls
+                            # Count NET new lines: Edit counts growth only; Write counts per-file growth
                             tool_name = item.get("name", "")
                             if tool_name == "Edit":
                                 new_str = parsed_input.get("new_string", "") or ""
-                                lines_added_count += len(str(new_str).splitlines())
+                                old_str = parsed_input.get("old_string", "") or ""
+                                net = len(str(new_str).splitlines()) - len(str(old_str).splitlines())
+                                if net > 0:
+                                    lines_added_count += net
                             elif tool_name == "Write":
                                 content_str = parsed_input.get("content", "") or ""
-                                lines_added_count += len(str(content_str).splitlines())
+                                file_path_w  = parsed_input.get("file_path", "") or ""
+                                new_lines    = len(str(content_str).splitlines())
+                                prev_lines   = _file_last_write.get(file_path_w, 0)
+                                lines_added_count += max(0, new_lines - prev_lines)
+                                _file_last_write[file_path_w] = new_lines
                             # Track git/gh operations and GitHub repo slugs
                             if tool_name == "Bash":
                                 cmd = parsed_input.get("command", "")
@@ -648,3 +648,116 @@ def aggregate_intents(sessions: list) -> dict:
         "timeline": timeline,
         "total": sum(totals.values()),
     }
+
+
+# ── Active time quality classification ────────────────────────────────────────
+
+def _load_quality_config() -> tuple:
+    """Load active time quality classification from prompts/active_time_quality.txt."""
+    path = Path(__file__).parent / "prompts" / "active_time_quality.txt"
+    user_rx = None
+    tool_rx = None
+    modes_order = []  # [(name, intents_set, desc)]
+    colors = {}
+    section = None
+    if not path.exists():
+        return user_rx, tool_rx, modes_order, colors
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("["):
+            section = line.strip("[]")
+            continue
+        if section == "hand_holding_user_patterns":
+            user_rx = _re.compile(line, _re.I)
+        elif section == "hand_holding_tool_patterns":
+            tool_rx = _re.compile(line, _re.I)
+        elif section == "modes":
+            parts = [p.strip() for p in line.split("|", 2)]
+            if len(parts) == 3:
+                name, intents_str, desc = parts
+                intents = set(i.strip() for i in intents_str.split(","))
+                modes_order.append((name, intents, desc))
+        elif section == "mode_colors":
+            parts = [p.strip() for p in line.split("|", 1)]
+            if len(parts) == 2:
+                colors[parts[0]] = parts[1]
+    return user_rx, tool_rx, modes_order, colors
+
+
+_QUALITY_USER_RX, _QUALITY_TOOL_RX, _QUALITY_MODES, _QUALITY_COLORS = _load_quality_config()
+
+
+def compute_active_time_quality(sessions: list) -> dict:
+    """Classify active time into quality modes showing how Claude contributed.
+
+    Returns dict with mode_name → minutes. Two detection layers:
+    1. Hand-holding: user correcting Claude OR error signals in tool output
+    2. Mode: based on intent classification of the message content
+    """
+    from datetime import datetime as _dt
+
+    modes: dict = {name: 0.0 for name, _, _ in _QUALITY_MODES}
+    modes["Needed hand-holding"] = 0.0
+
+    for s in sessions:
+        user_turns = []
+        for m in s.get("messages", []):
+            if m.get("role") != "user":
+                continue
+            ts_str = m.get("timestamp", "")
+            try:
+                ts = _dt.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                ts = None
+
+            text  = m.get("text", "").strip()
+            tools = m.get("tools_after", [])
+            intents    = classify_message_intent(text)
+            tools_text = " ".join(tools)
+
+            # Layer 1: hand-holding detection
+            user_correcting = bool(_QUALITY_USER_RX and _QUALITY_USER_RX.search(text[:300]))
+            tool_errors     = bool(_QUALITY_TOOL_RX and _QUALITY_TOOL_RX.search(tools_text))
+            needs_handholding = user_correcting or tool_errors
+
+            # Trivial turn detection
+            first_line = text.split("\n")[0].strip()
+            is_trivial = len(first_line) < 20
+
+            user_turns.append({
+                "ts": ts, "intents": intents, "tools": len(tools),
+                "needs_handholding": needs_handholding, "is_trivial": is_trivial,
+            })
+
+        # Compute time per turn from timestamp gaps (capped at 5 min for idle)
+        for i in range(len(user_turns)):
+            if (i < len(user_turns) - 1
+                    and user_turns[i]["ts"] and user_turns[i + 1]["ts"]):
+                gap = (user_turns[i + 1]["ts"] - user_turns[i]["ts"]).total_seconds() / 60
+                user_turns[i]["minutes"] = min(gap, 5)
+            else:
+                user_turns[i]["minutes"] = 1
+
+        # Classify each turn
+        for t in user_turns:
+            mins = t["minutes"]
+            if t["needs_handholding"]:
+                modes["Needed hand-holding"] += mins
+                continue
+            if t["is_trivial"]:
+                modes.setdefault("Grunt work handled", 0.0)
+                modes["Grunt work handled"] += mins
+                continue
+            matched = False
+            for mode_name, intent_set, _ in _QUALITY_MODES:
+                if any(i in intent_set for i in t["intents"]):
+                    modes[mode_name] += mins
+                    matched = True
+                    break
+            if not matched:
+                modes.setdefault("Builder", 0.0)
+                modes["Builder"] += mins
+
+    return {k: round(v, 1) for k, v in modes.items() if v > 0}

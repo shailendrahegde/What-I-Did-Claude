@@ -236,7 +236,8 @@ def _build_transcript(sessions: list) -> str:
                     reads += 1
                 elif any(w in tl for w in ("edit", "write", "bash: write")):
                     edits += 1
-                    fname_match = _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    fname_match = (_re2.search(r'(?:Edit|Write)\s+(\S+\.\w{1,8})', t, _re2.I)
+                                   or _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t))
                     if fname_match:
                         fn = fname_match.group(1)
                         edit_targets[fn] = edit_targets.get(fn, 0) + 1
@@ -340,7 +341,8 @@ def _build_session_metrics(sessions: list) -> dict:
                     reads += 1
                 elif any(w in tl for w in ("edit", "write", "bash: write")):
                     edits += 1
-                    fname_match = _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t)
+                    fname_match = (_re2.search(r'(?:Edit|Write)\s+(\S+\.\w{1,8})', t, _re2.I)
+                                   or _re2.search(r'[\\/]([^\\/]+\.\w{1,8})', t))
                     if fname_match:
                         fn = fname_match.group(1)
                         edit_targets[fn] = edit_targets.get(fn, 0) + 1

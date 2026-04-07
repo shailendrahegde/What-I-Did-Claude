@@ -88,18 +88,45 @@ def _kpi_card(value: str, label: str, sub: str = "") -> str:
     </td>"""
 
 
-def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
+def _kpi_section(goals: list, analysis: dict, n_sessions: int,
+                 total_prs: int = 0, total_commits: int = 0) -> str:
     total_human_h = sum(g.get("human_hours", 0) for g in goals)
-    n_goals       = len(goals)
     lines_added   = analysis.get("lines_added", 0)
+    lines_removed = analysis.get("lines_removed", 0)
     active_dates  = analysis.get("active_dates", [])
-    n_active_days = len(active_dates) if active_dates else 1
-    total_tasks   = sum(len(g.get("tasks", [])) for g in goals)
+    active_days   = max(1, len(active_dates))
+
+    # Deduplicated total active minutes from session_metrics
+    _seen: set = set()
+    total_active_min = 0.0
+    for _key, _m in analysis.get("session_metrics", {}).items():
+        if not isinstance(_m, dict):
+            continue
+        if "|" in _key:
+            _date, _proj = _key.split("|", 1)
+            _canon = (_date, _proj.replace("\\", "/").split("/")[-1].lower().strip().replace(" ", "-"))
+        else:
+            _canon = (_key,)
+        if _canon in _seen:
+            continue
+        _seen.add(_canon)
+        total_active_min += _m.get("active_minutes", 0)
+
+    active_val = f"{total_active_min / 60:.1f}h" if total_active_min >= 60 else f"{total_active_min:.0f}m"
+    active_sub = f"{active_days} active day{'s' if active_days != 1 else ''}"
+
+    speed_val = (f"{total_human_h / (total_active_min / 60):.1f}\u00d7"
+                 if total_active_min > 0 else "—")
 
     h_str = _fmt_h(total_human_h)
-    sessions_label = f"{n_sessions} sessions"
+    effort_sub = (f'<a href="#evidence-hdr" style="color:{C["accent"]};'
+                  f'text-decoration:none;font-size:9px" onclick="toggleDetail(\'evidence\');'
+                  f'return false;">see evidence &#9656;</a>')
 
     lines_val = f"+{lines_added:,}" if lines_added else "—"
+    lines_sub = f"{lines_removed:,} removed" if lines_removed else ""
+
+    pr_sub = f"{total_commits} commit{'s' if total_commits != 1 else ''}"
 
     return f"""
   <tr>
@@ -107,11 +134,11 @@ def _kpi_section(goals: list, analysis: dict, n_sessions: int) -> str:
                border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
-          {_kpi_card(str(n_goals), "Projects<br>Assisted", sessions_label)}
-          {_kpi_card(h_str, "Human Effort<br>Equivalent", f"@ ${HOURLY_RATE}/hr")}
-          {_kpi_card(str(total_tasks), "Tasks<br>Delivered", "")}
-          {_kpi_card(lines_val, "Lines of Code<br>Added", "")}
-          {_kpi_card(str(n_active_days), "Active<br>Days", "")}
+          {_kpi_card(h_str, "Human Effort<br>Equivalent", effort_sub)}
+          {_kpi_card(active_val, "Active<br>Time", active_sub)}
+          {_kpi_card(speed_val, "Speed<br>Multiplier", "vs. unassisted expert")}
+          {_kpi_card(lines_val, "Lines of Code<br>Added", lines_sub)}
+          {_kpi_card(str(total_prs), "PRs<br>Merged", pr_sub)}
         </tr>
       </table>
     </td>
@@ -533,128 +560,104 @@ def _daily_activity_detail(sessions: list, buckets=None, bucket_labels=None) -> 
 # "How I Collaborated" section
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _collaboration_intent(sessions: list, goals: list, project_label_map: dict = None) -> str:
-    """Conic-gradient donut chart with intent legend + per-project bars."""
-    from harvest import aggregate_intents, _INTENT_COLORS, _INTENT_ICONS
+def _collaboration_intent(sessions: list, goals: list = None, project_label_map: dict = None) -> str:
+    """Card grid showing how Claude contributed — quality modes with % and time."""
+    from harvest import compute_active_time_quality, _QUALITY_COLORS
 
-    if project_label_map is None:
-        project_label_map = {}
+    MODE_META = {
+        "Creative partner":    {"icon": "&#127912;", "desc": "Design, strategy, architecture"},
+        "Research assistant":  {"icon": "&#128300;", "desc": "Exploring options, investigating"},
+        "Builder":             {"icon": "&#128679;", "desc": "Writing code, generating files"},
+        "Refinement partner":  {"icon": "&#128260;", "desc": "Iterating, polishing, improving"},
+        "Needed hand-holding": {"icon": "&#128295;", "desc": "Errors, retries, course-correcting AI"},
+        "Grunt work handled":  {"icon": "&#9889;",   "desc": "Git ops, config, installs, routine"},
+    }
 
-    data = aggregate_intents(sessions)
-    counts   = data.get("counts", {})
-    by_proj_raw  = data.get("by_project", {})
-    grand_total = data.get("total", 0) or 1
-
-    if not counts:
+    modes = compute_active_time_quality(sessions)
+    total = sum(modes.values())
+    if total < 1:
         return ""
 
-    # Remap raw project names to consistent goal labels when possible.
-    by_proj = {}
-    for raw_name, pcounts in by_proj_raw.items():
-        display = project_label_map.get(raw_name) or raw_name
-        if display in by_proj:
-            for cat, n in pcounts.items():
-                by_proj[display][cat] = by_proj[display].get(cat, 0) + n
-        else:
-            by_proj[display] = dict(pcounts)
+    sorted_modes = sorted(modes.items(), key=lambda x: -x[1])
 
-    # Sort descending
-    sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    handholding_raw = modes.get("Needed hand-holding", 0) / total * 100
+    grunt_raw       = modes.get("Grunt work handled",  0) / total * 100
+    high_value_raw  = 100 - handholding_raw - grunt_raw
+    handholding_pct = round(handholding_raw)
+    grunt_pct       = round(grunt_raw)
+    high_value_pct  = max(0, min(100, round(high_value_raw)))
+    total_str = f"{total:.0f}m" if total < 60 else f"{total / 60:.1f}h"
+    n_modes   = len([m for m in sorted_modes if m[1] >= 0.1])
 
-    # Build conic-gradient stops
-    stops = []
-    cumulative = 0
-    for cat, n in sorted_items:
-        pct_start = cumulative / grand_total * 100
-        cumulative += n
-        pct_end = cumulative / grand_total * 100
-        color = _INTENT_COLORS.get(cat, "#999")
-        stops.append(f"{color} {pct_start:.1f}% {pct_end:.1f}%")
-    gradient = ", ".join(stops)
+    headline = (f"{high_value_pct}% of your collaboration was high-value work "
+                f"&mdash; creating, researching, building, and refining.")
+    sub_parts = []
+    if grunt_pct > 0:
+        sub_parts.append(f"Claude automated {grunt_pct}% of routine grunt work")
+    if handholding_pct > 0:
+        sub_parts.append(f"{handholding_pct}% was spent course-correcting AI output")
+    subtitle = " &middot; ".join(sub_parts) if sub_parts else ""
 
-    # Legend rows
-    legend_rows = ""
-    for cat, n in sorted_items:
-        pct   = n / grand_total * 100
-        color = _INTENT_COLORS.get(cat, "#999")
-        icon  = _INTENT_ICONS.get(cat, "")
-        legend_rows += f"""
-          <tr>
-            <td style="padding:3px 8px 3px 0;vertical-align:middle">
-              <span style="display:inline-block;width:10px;height:10px;border-radius:2px;
-                           background:{color};vertical-align:middle;margin-right:4px"></span>
-              <span style="font-size:11px;color:{C['text']}">{icon} {cat}</span>
-            </td>
-            <td style="padding:3px 0;width:120px;vertical-align:middle">
-              <div style="background:{C['border']};border-radius:3px;height:10px">
-                <div style="background:{color};border-radius:3px;height:10px;
-                            width:{pct:.0f}%"></div>
-              </div>
-            </td>
-            <td style="padding:3px 0 3px 6px;font-size:10px;color:{C['muted']};
-                       white-space:nowrap">{n} ({pct:.0f}%)</td>
-          </tr>"""
+    visible = [(mode, mins) for mode, mins in sorted_modes if mins >= 0.1]
+    grid_rows = []
+    for pair_start in range(0, len(visible), 2):
+        pair = visible[pair_start:pair_start + 2]
+        cells = ""
+        for mode, mins in pair:
+            pct   = mins / total * 100
+            meta  = MODE_META.get(mode, {"icon": "", "desc": ""})
+            color = _QUALITY_COLORS.get(mode, C["muted"])
+            mins_str  = f"{mins:.0f}m" if mins < 60 else f"{mins / 60:.1f}h"
+            bar_width = max(pct, 4)
+            cells += f"""
+          <td style="padding:5px;width:50%;vertical-align:top">
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="border:1px solid {C['border']};border-left:4px solid {color};
+                          border-radius:6px;overflow:hidden">
+              <tr>
+                <td style="padding:10px 12px">
+                  <div style="display:flex;align-items:baseline;margin-bottom:6px">
+                    <span style="font-size:18px;margin-right:6px">{meta['icon']}</span>
+                    <span style="font-size:12px;font-weight:700;color:{C['text']}">{mode}</span>
+                    <span style="font-size:16px;font-weight:800;color:{color};margin-left:auto">
+                      {pct:.0f}%</span>
+                  </div>
+                  <div style="background:{C['bg']};border-radius:3px;height:8px;margin-bottom:6px;
+                              overflow:hidden">
+                    <div style="width:{bar_width:.0f}%;background:{color};height:100%;
+                                border-radius:3px"></div>
+                  </div>
+                  <div style="font-size:11px;color:{C['muted']};line-height:1.3">
+                    {meta['desc']} &middot; <strong style="color:{C['text']}">{mins_str}</strong></div>
+                </td>
+              </tr>
+            </table>
+          </td>"""
+        if len(pair) == 1:
+            cells += '<td style="padding:5px;width:50%"></td>'
+        grid_rows.append(f"<tr>{cells}</tr>")
 
-    # Per-project bars (top 5 projects)
-    proj_rows = ""
-    top_projs = sorted(by_proj.items(), key=lambda x: sum(x[1].values()), reverse=True)[:5]
-    for proj, pcounts in top_projs:
-        ptotal = sum(pcounts.values()) or 1
-        bar_segments = ""
-        for cat, n in sorted(pcounts.items(), key=lambda x: x[1], reverse=True):
-            if n == 0:
-                continue
-            w   = n / ptotal * 100
-            col = _INTENT_COLORS.get(cat, "#999")
-            bar_segments += (
-                f'<div title="{cat}: {n}" style="background:{col};width:{w:.0f}%;'
-                f'height:12px;display:inline-block"></div>'
-            )
-        # Use display label if available, otherwise fall back to short folder name
-        short_proj = proj.replace("\\", "/").split("/")[-1] if proj else "unknown"
-        proj_rows += f"""
-          <tr>
-            <td style="font-size:11px;color:{C['muted']};padding:3px 8px 3px 0;
-                       white-space:nowrap;max-width:120px;overflow:hidden;
-                       text-overflow:ellipsis">{short_proj}</td>
-            <td style="padding:3px 0;width:100%">
-              <div style="display:flex;border-radius:3px;overflow:hidden;height:12px">
-                {bar_segments}
-              </div>
-            </td>
-            <td style="font-size:10px;color:{C['muted']};padding:3px 0 3px 6px;
-                       white-space:nowrap">{ptotal}</td>
-          </tr>"""
+    grid_html = "\n          ".join(grid_rows)
 
     return f"""
   <tr>
-    <td style="background:{C['card']};padding:16px 24px 18px;
-               border-left:1px solid {C['border']};border-right:1px solid {C['border']};
-               border-top:1px solid {C['border']}">
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr><td bgcolor="#24292f" style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
-          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
-                      color:rgba(255,255,255,0.7)">How I Collaborated</div>
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
-            Intent behind every interaction &mdash; from research to shipping.</div>
-        </td></tr>
-      </table>
-      <div style="padding:14px 24px 16px">
-      <table width="100%" cellpadding="0" cellspacing="0">
-        <tr>
-          <td style="vertical-align:top;width:120px;padding-right:20px">
-            <div style="width:100px;height:100px;border-radius:50%;
-                        background:conic-gradient({gradient});
-                        margin:0 auto"></div>
-          </td>
-          <td style="vertical-align:top">
-            <table cellpadding="0" cellspacing="0">
-              {legend_rows}
-            </table>
-          </td>
-          {f'<td style="vertical-align:top;padding-left:20px;border-left:1px solid {C["border"]};min-width:220px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:{C["muted"]};margin-bottom:6px">By project</div><table cellpadding="0" cellspacing="0" style="width:100%">{proj_rows}</table></td>' if proj_rows else ""}
-        </tr>
-      </table>
+    <td style="background:{C['card']};padding:0;
+               border-left:1px solid {C['border']};border-right:1px solid {C['border']}">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td bgcolor="#24292f"
+             style="background:linear-gradient(135deg,#24292f,#1b1f23);padding:10px 24px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;
+                    color:rgba(255,255,255,0.7)">How I Collaborated</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:2px">
+          The different types of work Claude handled for you</div>
+      </td></tr></table>
+      <div style="padding:16px 24px 18px">
+        <div style="font-size:14px;font-weight:700;color:{C['text']};margin-bottom:4px;line-height:1.4">
+          {headline}</div>
+        <div style="font-size:11px;color:{C['muted']};margin-bottom:16px">
+          {total_str} of active collaboration across {n_modes} modes &middot; {subtitle}</div>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          {grid_html}
+        </table>
       </div>
     </td>
   </tr>"""
@@ -1135,11 +1138,11 @@ def compute_formula_estimate(metrics: dict) -> dict:
             "tool_h": tool_h, "turns_h": turns_h, "tok_h": tok_h,
             "active_h": active_h, "lines_h": lines_h, "base": base,
             "iteration_factor": iteration_factor, "scope_factor": scope_factor,
-            "combined_mult": min(iteration_factor * scope_factor, 1.5),
+            "combined_mult": min(iteration_factor * scope_factor, 2.2),
             "total": per_day_total,
         }
 
-    combined = min(iteration_factor * scope_factor, 1.5)
+    combined = min(iteration_factor * scope_factor, 2.2)
     total = max((base * combined) + lines_h, 0.25)
 
     return {
@@ -1582,6 +1585,16 @@ def generate_html(target_date: str, analysis: dict, sessions: list, max_width: i
                 if lbl:
                     project_label_map[sp] = lbl
 
+    # Compute PR and commit counts from session data
+    _seen_prs: set = set()
+    _total_commits = 0
+    for s in sessions:
+        for pr in s.get("pull_requests", []):
+            _seen_prs.add(pr)
+        _total_commits += s.get("git_commits", 0)
+    total_prs     = len(_seen_prs)
+    total_commits = _total_commits
+
     js = """
 <script>
 function toggleDetail(id) {
@@ -1709,7 +1722,7 @@ window.onload = function() {
     </td>
   </tr>
 
-  {_kpi_section(goals, analysis, n_sessions)}
+  {_kpi_section(goals, analysis, n_sessions, total_prs=total_prs, total_commits=total_commits)}
 
   <!-- WHAT GOT ACCOMPLISHED: summary table + task accordion in one dark-header section -->
   <tr>
@@ -1819,7 +1832,7 @@ def _goals_summary(goals: list) -> str:
           <td style="padding:12px 16px;border-bottom:1px solid {C['border']};
                      vertical-align:top;width:53%">
             <div style="font-size:13px;font-weight:600;color:{C['text']};line-height:1.35">
-              {date_badge}{g.get('title','')}
+              {date_badge}{g.get('label') or g.get('title','')}
             </div>
             {f'<div style="margin-top:5px">{doc_html}</div>' if doc_html else ''}
           </td>
@@ -1917,7 +1930,7 @@ def _goal_detail_headers(goals: list, session_lookup: dict = None,
                   <span id="{gid}-arrow" style="font-size:11px;color:{C['accent']};
                                                  margin-right:6px">&#9654;</span>
                   <span style="font-size:13px;font-weight:600;color:{C['text']}">
-                    {g.get('title','')}
+                    {g.get('label') or g.get('title','')}
                   </span>
                   <span style="font-size:11px;color:{C['muted']};margin-left:8px">
                     {n} task{'s' if n!=1 else ''}
