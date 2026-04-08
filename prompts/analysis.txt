@@ -92,16 +92,19 @@ RESEARCH FOUNDATION:
   (Cambon et al. 2023, Peng et al. 2023)
 - The human EQUIVALENT is what matters: reverse the speedup to get what
   it would take without AI
-- Three signals independently explain AI-assisted effort (OLS, 48 days):
+- Four signals independently explain AI-assisted effort (OLS, 48 days):
     1. Conversation turns — each substantive turn = expert thinking
+       (fallback: tool invocations as proxy when turn data is unavailable)
     2. Logic code lines — .py/.ts/.go/.rs/.java/.sh only; HTML/CSS/JSON/MD excluded
     3. Read/search calls — file reads + grep/glob/search; captures investigation
+    4. Tool invocations — total tool calls; captures non-coding tasks (presentations,
+       browser automation) where logic lines ≈ 0 but tool activity is substantial
 - Boilerplate lines (HTML/CSS/JSON/MD/YAML) correlate NEGATIVELY with effort
   (r=−0.14); logic lines r=+0.41
 
 THE FORMULA IS A FLOOR, NOT A CEILING.
-The deterministic formula (turns_h + lines_h + reads_h) gives the minimum
-plausible estimate based on mechanical counts. Your semantic judgment about
+The deterministic formula (interaction_h + lines_h + reads_h + tools_h) gives the
+minimum plausible estimate based on mechanical counts. Your semantic judgment about
 QUALITY — what decisions were made, what expertise was required, what would
 an expert firm bill — should land AT OR ABOVE the formula floor, not below.
 The formula cannot see business value; you can.
@@ -135,6 +138,16 @@ STEP 2 — Estimate from multiple signals; use the HIGHEST as your base:
   READ/SEARCH CALLS (investigation and analysis):
     Heavy read sessions (40+ reads/searches) add 0.5–1h for navigation and judgment
     even when no code was written.
+
+  TOOL INVOCATIONS (non-coding activity signal):
+    Captures work where logic lines ≈ 0 but tools were heavily used (e.g. presentations,
+    research, browser automation, config exploration).
+    10–30 tools = minor supplement (~0.25h)  |  75–150 = moderate (~0.5h)  |  150+ = major (~0.6h)
+    If total_tool_calls today >> lines_added, weight this signal more heavily.
+
+  PREMIUM REQUESTS (fallback — use only when turn count is 0 or unavailable):
+    Older sessions may lack per-turn data. Use total tool invocations as proxy for depth.
+    Same scale as Conversation Turns but discounted 30% (tools are noisier than turns).
 
 STEP 3 — Apply upward semantic adjustments based on transcript content:
   Significant rework or debugging cycles:                    +25–50% on base
