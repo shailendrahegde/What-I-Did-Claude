@@ -48,7 +48,12 @@ Time-of-day activity patterns with a daily heatmap — spot whether you're an ea
 
 ### 📐 Estimation Evidence
 
-Collapsible detail showing the quantitative signals behind every effort number — tool invocations, active engagement time, token volumes, and the deterministic formula. Evidence that Claude isn't just handling boilerplate — it's tackling real complexity.
+Collapsible detail showing the quantitative signals behind every effort number. Effort estimates use a two-system approach:
+
+- **AI semantic estimate** (primary): Claude reads the full session transcript — every instruction, every tool action, every code change — and uses active time × 2–4 as the primary anchor, scaled up by qualitative judgment about complexity, decisions made, and expertise required.
+- **Deterministic formula** (transparency floor): An additive log formula — `turns_h + lines_h + reads_h` — computed from raw session metrics with no AI involvement. Calibrated on OLS regression. Logic lines only (`.py`/`.ts`/`.go`/`.rs`/`.java`/`.sh` etc.) — HTML/CSS/JSON/MD excluded because boilerplate lines correlate *negatively* with effort.
+
+The AI estimate should land at or above the formula floor. The formula provides auditability; the AI provides semantic judgment.
 
 ## Quick Start
 

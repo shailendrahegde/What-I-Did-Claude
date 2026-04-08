@@ -227,12 +227,14 @@ def _build_transcript(sessions: list) -> str:
         # Enriched quantitative signals block
         user_msgs = [m for m in s["messages"] if m["role"] == "user"]
         n_tools = sum(len(m.get("tools_after", [])) for m in s["messages"] if m["role"] == "user")
-        reads, edits, runs = 0, 0, 0
+        reads, edits, runs, searches = 0, 0, 0, 0
         edit_targets: dict = {}
         for m in s["messages"]:
             for t in m.get("tools_after", []):
                 tl = t.lower()
-                if any(w in tl for w in ("read", "grep", "glob", "search", "find", "explore")):
+                if any(w in tl for w in ("grep", "glob", "search", "find")):
+                    searches += 1
+                elif any(w in tl for w in ("read", "explore")):
                     reads += 1
                 elif any(w in tl for w in ("edit", "write", "bash: write")):
                     edits += 1
@@ -249,11 +251,15 @@ def _build_transcript(sessions: list) -> str:
         wall_min = _cem(s.get("session_start", ""), s.get("session_end", ""))
         iter_depth = round(sum(edit_targets.values()) / max(len(edit_targets), 1), 1) if edit_targets else 0.0
         la = s.get("lines_added", 0)
+        lines_logic = s.get("lines_logic", 0)
+        lines_boilerplate = s.get("lines_boilerplate", 0)
 
-        sig = [f"SIGNALS: {n_tools} tools ({reads} reads, {edits} edits, {runs} runs)"]
+        sig = [f"SIGNALS: {n_tools} tools ({reads} reads, {searches} searches, {edits} edits, {runs} runs)"]
         sig.append(f"  Conversation turns: {len(user_msgs)}")
         if la:
             sig.append(f"  Lines added: +{la}")
+        sig.append(f"  Logic lines: +{lines_logic}  Boilerplate lines: +{lines_boilerplate}")
+        sig.append(f"  Reads: {reads}  Searches: {searches}")
         sig.append(f"  Active time: {active_min:.0f}m of {wall_min:.0f}m wall clock")
         if iter_depth > 1:
             sig.append(f"  Iteration depth: {iter_depth} edits/file avg")
@@ -324,7 +330,9 @@ def _build_session_metrics(sessions: list) -> dict:
         basename = proj.split("/")[-1].split("\\")[-1]
 
         tok = s.get("tokens", {})
-        lines_added = s.get("lines_added", 0)
+        lines_added      = s.get("lines_added", 0)
+        lines_logic      = s.get("lines_logic", 0)
+        lines_boilerplate = s.get("lines_boilerplate", 0)
         active_min  = _compute_active_minutes(s)
         wall_min    = compute_elapsed_minutes(
             s.get("session_start", ""),
@@ -332,12 +340,14 @@ def _build_session_metrics(sessions: list) -> dict:
         )
 
         # Count tool invocations and classify by type
-        reads, edits, runs = 0, 0, 0
+        reads, edits, runs, searches = 0, 0, 0, 0
         edit_targets: dict = {}
         for m in s.get("messages", []):
             for t in m.get("tools_after", []):
                 tl = t.lower()
-                if any(w in tl for w in ("read", "grep", "glob", "search", "find", "explore")):
+                if any(w in tl for w in ("grep", "glob", "search", "find")):
+                    searches += 1
+                elif any(w in tl for w in ("read", "explore")):
                     reads += 1
                 elif any(w in tl for w in ("edit", "write", "bash: write")):
                     edits += 1
@@ -371,10 +381,13 @@ def _build_session_metrics(sessions: list) -> dict:
             "tokens":              tok.get("input", 0) + tok.get("output", 0),
             "tool_invocations":    tools_count,
             "lines_added":         lines_added,
+            "lines_logic":         lines_logic,
+            "lines_boilerplate":   lines_boilerplate,
             "active_minutes":      active_min,
             "wall_clock_minutes":  wall_min,
             "sessions":            1,
             "reads":               reads,
+            "searches":            searches,
             "edits":               edits,
             "runs":                runs,
             "conversation_turns":  conv_turns,
@@ -393,10 +406,13 @@ def _build_session_metrics(sessions: list) -> dict:
                 e["tokens"]             += entry["tokens"]
                 e["tool_invocations"]   += entry["tool_invocations"]
                 e["lines_added"]        += entry["lines_added"]
+                e["lines_logic"]        += entry["lines_logic"]
+                e["lines_boilerplate"]  += entry["lines_boilerplate"]
                 e["active_minutes"]     += entry["active_minutes"]
                 e["wall_clock_minutes"] += entry["wall_clock_minutes"]
                 e["sessions"]           += 1
                 e["reads"]              += entry["reads"]
+                e["searches"]           += entry["searches"]
                 e["edits"]              += entry["edits"]
                 e["runs"]               += entry["runs"]
                 e["conversation_turns"] += entry["conversation_turns"]

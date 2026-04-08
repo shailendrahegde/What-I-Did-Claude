@@ -61,6 +61,13 @@ _INTENT_COLORS = {
     "Navigating":    "#bf8700",
 }
 
+_LOGIC_EXTS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".cs",
+    ".cpp", ".c", ".h", ".hpp", ".sh", ".bash", ".zsh", ".ps1", ".rb",
+    ".php", ".r", ".sql", ".kt", ".swift", ".dart", ".scala", ".ex", ".exs",
+    ".vue", ".svelte", ".tf", ".hcl",
+}
+
 # Document/data file extensions worth surfacing as referenced docs
 _DOC_EXTS = {
     ".pptx", ".ppt", ".docx", ".doc", ".pdf",
@@ -267,6 +274,8 @@ def get_sessions_for_date(target_date: str) -> list:
         git_ops        = []
         git_repos      = set()
         lines_added_count = 0
+        lines_logic_count = 0
+        lines_boilerplate_count = 0
         _file_last_write: dict = {}   # track last Write size per path → net-only counting
         pull_requests  = []
         cwd_seen  = None   # actual working directory from entry metadata
@@ -403,13 +412,21 @@ def get_sessions_for_date(target_date: str) -> list:
                                 net = len(str(new_str).splitlines()) - len(str(old_str).splitlines())
                                 if net > 0:
                                     lines_added_count += net
+                                    lines_logic_count += net  # Edit = targeted in-place = always logic
                             elif tool_name == "Write":
                                 content_str = parsed_input.get("content", "") or ""
                                 file_path_w  = parsed_input.get("file_path", "") or ""
                                 new_lines    = len(str(content_str).splitlines())
                                 prev_lines   = _file_last_write.get(file_path_w, 0)
-                                lines_added_count += max(0, new_lines - prev_lines)
+                                net_write    = max(0, new_lines - prev_lines)
+                                lines_added_count += net_write
                                 _file_last_write[file_path_w] = new_lines
+                                if net_write > 0:
+                                    ext = Path(file_path_w).suffix.lower() if file_path_w else ""
+                                    if ext in _LOGIC_EXTS:
+                                        lines_logic_count += net_write
+                                    else:
+                                        lines_boilerplate_count += net_write
                             # Track git/gh operations and GitHub repo slugs
                             if tool_name == "Bash":
                                 cmd = parsed_input.get("command", "")
@@ -488,7 +505,9 @@ def get_sessions_for_date(target_date: str) -> list:
                 "session_end": session_end,
                 "git_ops":      git_ops,
                 "git_repos":    sorted(git_repos),
-                "lines_added":  lines_added_count,
+                "lines_added":       lines_added_count,
+                "lines_logic":       lines_logic_count,
+                "lines_boilerplate": lines_boilerplate_count,
                 "pull_requests": pull_requests,
             })
 
