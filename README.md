@@ -86,7 +86,6 @@ claude
 
 ```bash
 # Last 7 days (default)
-claude
 python whatidid.py
 
 # Lookback shortcuts — any number of days
