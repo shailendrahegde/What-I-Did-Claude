@@ -75,7 +75,14 @@ To override (e.g. in CI or without Claude Code):
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-### 3. Run your first report
+
+### 3. Open Claude
+
+```bash
+claude
+```
+
+### 4. Run your first report
 
 ```bash
 # Last 7 days (default)
