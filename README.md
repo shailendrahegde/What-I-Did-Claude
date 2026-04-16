@@ -79,6 +79,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ```bash
 # Last 7 days (default)
+claude
 python whatidid.py
 
 # Lookback shortcuts — any number of days
